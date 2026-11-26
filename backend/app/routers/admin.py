@@ -475,11 +475,16 @@ def create_team(event_id: str, body: TeamIn, request: Request, p: Principal = De
     import secrets
 
     with app_session() as s:
+        ev = s.execute(
+            text("SELECT max_teams FROM app.events WHERE id = CAST(:e AS uuid) FOR UPDATE"),
+            {"e": event_id},
+        ).first()
+        if ev is None:
+            raise ApiError("NOT_FOUND")
         count = s.execute(
             text("SELECT count(*) FROM app.teams WHERE event_id = CAST(:e AS uuid)"), {"e": event_id}
         ).scalar_one()
-        ev = s.execute(text("SELECT max_teams FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": event_id}).first()
-        if ev and int(count) >= int(ev[0]):
+        if int(count) >= int(ev[0]):
             raise ApiError("VALIDATION_ERROR", details={"capacity": f"Team cap ({ev[0]}) reached."})
         team_id = str(uuid7())
         join_code = secrets.token_hex(4).upper()
@@ -1035,7 +1040,33 @@ def time_adjustment(event_id: str, body: dict, request: Request, p: Principal = 
         raise ApiError("VALIDATION_ERROR", details={"adjustment": "stage_id and nonzero delta_seconds required."})
     if reason_code not in ("ACCOMMODATION", "OUTAGE", "DEVICE_FAILURE", "OTHER"):
         raise ApiError("VALIDATION_ERROR", details={"reason_code": "ACCOMMODATION|OUTAGE|DEVICE_FAILURE|OTHER"})
+    if abs(delta) > 86400:
+        raise ApiError("VALIDATION_ERROR", details={"delta_seconds": "Time adjustments must be within +/- 86400 seconds."})
     with app_session() as s:
+        stage = s.execute(
+            text(
+                "SELECT 1 FROM app.stages WHERE id = CAST(:s AS uuid) AND event_id = CAST(:e AS uuid)"
+            ),
+            {"s": stage_id, "e": event_id},
+        ).first()
+        if stage is None:
+            raise ApiError("VALIDATION_ERROR", details={"stage_id": "Stage must belong to the selected event."})
+        if user_id:
+            participant = s.execute(
+                text(
+                    "SELECT 1 FROM app.team_members tm "
+                    "JOIN app.teams t ON t.id = tm.team_id "
+                    "JOIN app.users u ON u.id = tm.user_id "
+                    "WHERE tm.user_id = CAST(:u AS uuid) AND t.event_id = CAST(:e AS uuid) "
+                    "AND u.role = 'participant' AND u.status = 'active'"
+                ),
+                {"u": user_id, "e": event_id},
+            ).first()
+            if participant is None:
+                raise ApiError(
+                    "VALIDATION_ERROR",
+                    details={"user_id": "Participant must have an active team membership in the selected event."},
+                )
         s.execute(
             text(
                 "INSERT INTO app.time_adjustments (id, stage_id, user_id, delta_seconds, reason_code, created_by) VALUES (CAST(:id AS uuid), CAST(:s AS uuid), CAST(:u AS uuid), :d, :r, CAST(:by AS uuid))"
