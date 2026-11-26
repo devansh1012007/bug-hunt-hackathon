@@ -604,8 +604,8 @@ def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
                 text(
                     "WITH member_rows AS ("
                     " SELECT u.id, u.email, u.name, u.role, u.status, t.id AS team_id, t.name AS team_name, "
-                    " COALESCE(latest_invite.used_at IS NOT NULL, TRUE) AS activated, "
-                    " COALESCE(latest_invite.created_at, u.created_at) AS created_at, latest_invite.expires_at "
+                    " (u.status = 'active') AS activated, "
+                    " COALESCE(latest_invite.created_at, u.created_at) AS created_at, NULL::timestamptz AS expires_at "
                     " FROM app.team_members tm "
                     " JOIN app.teams t ON t.id = tm.team_id "
                     " JOIN app.users u ON u.id = tm.user_id "
