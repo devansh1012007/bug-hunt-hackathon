@@ -9,7 +9,7 @@ Creates deterministic demo data that exercises every role and state:
   EXCLUDED from participant-visible storage)
 - ground truth (10 bugs, 2 flags) seeded from the manifest below with
   pattern-anchored locations (DAT-06)
-- rules document, announcements, invites (activation tokens printed once)
+- rules document, announcements, admin-managed participants (no invitation tokens)
 
 Never run against a live deployment: known credentials are dev-only.
 Usage: python seed.py [--reset]
@@ -23,7 +23,7 @@ import json
 import re
 import secrets
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent
