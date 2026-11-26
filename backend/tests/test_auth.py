@@ -145,26 +145,68 @@ def test_admin_password_reset_revokes_sessions_and_changes_password(client):
     assert token_version_after == token_version_before + 1
 
 
-def test_step_up_required_for_sensitive_admin_routes(client):
+def test_step_up_required_for_sensitive_admin_routes_and_safe_flag_crud(client):
     org = client.post(
         "/v1/auth/login", json={"email": "organizer@example.com", "password": "Dev-only!Passw0rd!"}
     ).json()
     oc = TestClient(client.app)
     oc.headers.update({"Authorization": f"Bearer {org['access_token']}"})
-    # ground truth authoring requires step-up: fresh session has none
-    r = oc.post(
-        f"/v1/admin/challenges/{_any_challenge_id(oc)}/ground-truth/flags",
+    challenge_id = _any_challenge_id(oc)
+
+    # Ground-truth authoring and reads require step-up.
+    denied = oc.post(
+        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
         json={"flag_key": "FLAG-TEST", "code": "FLAG{step_up}", "points": 5},
     )
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "ADMIN_STEP_UP_REQUIRED"
-    # after step-up it succeeds
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "ADMIN_STEP_UP_REQUIRED"
+    assert oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").status_code == 403
+
     oc.post("/v1/auth/step-up", json={"password": "Dev-only!Passw0rd!"}).raise_for_status()
-    r = oc.post(
-        f"/v1/admin/challenges/{_any_challenge_id(oc)}/ground-truth/flags",
-        json={"flag_key": "FLAG-TEST", "code": "FLAG{step_up}", "points": 5},
+    created = oc.post(
+        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
+        json={"flag_key": "FLAG-TEST", "code": "FLAG{step_up}", "points": 5, "max_awards": 3},
     )
-    assert r.status_code == 201, r.text
+    assert created.status_code == 201, created.text
+    flag_id = created.json()["flag_id"]
+
+    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags")
+    assert listed.status_code == 200, listed.text
+    flags = listed.json()["flags"]
+    flag = next(row for row in flags if row["id"] == flag_id)
+    assert flag["flag_key"] == "FLAG-TEST"
+    assert float(flag["points"]) == 5
+    assert flag["max_awards"] == 3
+    assert "code" not in flag
+    assert "code_hash" not in flag
+
+    updated = oc.patch(
+        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags/{flag_id}",
+        json={"flag_key": "FLAG-TEST-UPDATED", "points": 7.5, "max_awards": 9},
+    )
+    assert updated.status_code == 200, updated.text
+    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").json()["flags"]
+    flag = next(row for row in listed if row["id"] == flag_id)
+    assert flag["flag_key"] == "FLAG-TEST-UPDATED"
+    assert float(flag["points"]) == 7.5
+    assert flag["max_awards"] == 9
+    assert "code_hash" not in flag
+
+    replaced_code = oc.patch(
+        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags/{flag_id}",
+        json={"code": "FLAG{new_secret_code}", "points": 8},
+    )
+    assert replaced_code.status_code == 200, replaced_code.text
+    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").json()["flags"]
+    flag = next(row for row in listed if row["id"] == flag_id)
+    assert float(flag["points"]) == 8
+    assert "code" not in flag and "code_hash" not in flag
+
+    duplicate_key = oc.post(
+        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
+        json={"flag_key": "FLAG-TEST-UPDATED", "code": "FLAG{different_code}", "points": 2},
+    )
+    assert duplicate_key.status_code == 422
 
 
 def _any_challenge_id(oc):
