@@ -35,7 +35,6 @@ export default function AdminManagement() {
   })
   const [eventId, setEventId] = useState('')
   const [stageId, setStageId] = useState('')
-  const [teamId, setTeamId] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -75,12 +74,6 @@ export default function AdminManagement() {
     if (!stages.length) setStageId('')
   }, [liveQ.data, stageId])
 
-  useEffect(() => {
-    if (!teamsQ.data?.teams.some((team) => team.id === teamId)) {
-      setTeamId(teamsQ.data?.teams[0]?.id ?? '')
-    }
-  }, [teamsQ.data, teamId])
-
   const selectedEvent = useMemo(
     () => eventsQ.data?.events.find((event) => event.id === eventId) ?? null,
     [eventsQ.data, eventId],
@@ -93,7 +86,7 @@ export default function AdminManagement() {
   const [teamName, setTeamName] = useState('')
   const [teamCreated, setTeamCreated] = useState<{ name: string; code: string } | null>(null)
   const [inviteForm, setInviteForm] = useState({ email: '', team_id: '' })
-  const [inviteResult, setInviteResult] = useState<{ email: string; url: string; token: string } | null>(null)
+  const [inviteResult, setInviteResult] = useState<{ email: string; url: string } | null>(null)
   const [rosterFilter, setRosterFilter] = useState('')
   const [configText, setConfigText] = useState('')
   const [configDirty, setConfigDirty] = useState(false)
@@ -190,7 +183,7 @@ export default function AdminManagement() {
         body: { email: inviteForm.email.trim().toLowerCase(), team_id: inviteForm.team_id || null, role: 'participant' },
       })
       const url = new URL(result.activation_url, window.location.origin).toString()
-      setInviteResult({ email: inviteForm.email.trim(), url, token: result.invite_token })
+      setInviteResult({ email: inviteForm.email.trim(), url })
       setInviteForm({ email: '', team_id: '' })
       setNotice('Invitation created. Share the one-time activation link through your approved private channel.')
       await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
