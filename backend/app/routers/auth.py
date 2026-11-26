@@ -199,13 +199,13 @@ def login(body: LoginIn, request: Request, response: Response):
 class RegisterIn(BaseModel):
     email: EmailStr
     name: str = Field(min_length=2, max_length=160)
-    role: str = Field(default="participant", pattern="^(participant|reviewer|organizer|admin)$")
+    role: str = Field(default="reviewer", pattern="^(reviewer|organizer|admin)$")
 
 
 @router.post("/auth/register", status_code=201)
 def register(body: RegisterIn, request: Request, p: Principal = Depends(require_admin)):
     """Admin-only account registration. The user chooses the initial password at first sign-in."""
-    if body.role not in ("participant", "reviewer", "organizer", "admin"):
+    if body.role not in ("reviewer", "organizer", "admin"):
         raise ApiError("VALIDATION_ERROR", details={"role": "participant|reviewer|organizer|admin"})
     # Only an admin may create admin/organizer accounts.
     if body.role in ("admin", "organizer") and p.role != "admin":
