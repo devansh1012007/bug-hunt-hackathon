@@ -18,45 +18,129 @@ def test_login_rejects_wrong_password_generically(client):
     assert r2.json()["error"]["message"] == body["message"]
 
 
-def test_password_reset_revokes_sessions_and_bumps_token_version(client):
-    login1 = client.post(
-        "/v1/auth/login", json={"email": "p2.team1@example.com", "password": "Dev-only!Passw0rd!"}
-    ).json()
-    headers = {"Authorization": f"Bearer {login1['access_token']}"}
-    # request reset
-    r = client.post("/v1/auth/password/reset-request", json={"email": "p2.team1@example.com"})
-    assert r.status_code == 200
-    # fetch the reset token from the dev mail sink (documented dev-only behavior)
+def test_first_sign_in_claims_password_only_for_admin_registered_accounts(client):
+    admin_login = client.post(
+        "/v1/auth/login",
+        json={"email": "admin@example.com", "password": "Dev-only!Passw0rd!"},
+    )
+    assert admin_login.status_code == 200, admin_login.text
+    admin = TestClient(client.app)
+    admin.headers.update({"Authorization": f"Bearer {admin_login.json()['access_token']}"})
+
+    email = "first-claim@example.test"
+    registration = admin.post(
+        "/v1/auth/register",
+        json={"email": email, "name": "First Claim User", "role": "reviewer"},
+    )
+    assert registration.status_code == 201, registration.text
+    assert registration.json()["password_setup_required"] is True
+
     from app.db import app_engine
     from sqlalchemy import text
 
     with app_engine.connect() as conn:
-        token_version_before = conn.execute(
-            text("SELECT token_version FROM app.users WHERE email = :e"), {"e": "p2.team1@example.com"}
-        ).scalar_one()
-    # the dev mail sink printed the raw token; we cannot recover it from the hash.
-    # Instead verify the FLOW through step-up: rotate the password via reset using a
-    # directly-inserted known token.
-    import hashlib
+        before = conn.execute(
+            text("SELECT password_hash, status, token_version FROM app.users WHERE lower(email) = :e"),
+            {"e": email},
+        ).mappings().one()
+    assert before["password_hash"] is None
+    assert before["status"] == "active"
 
-    raw = "known-reset-token-for-tests-0123456789abcdef"
-    th = hashlib.sha256(raw.encode()).hexdigest()
-    with app_engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO app.password_resets (id, user_id, token_hash, expires_at) "
-                "SELECT gen_random_uuid(), id, :th, now() + interval '30 minutes' FROM app.users WHERE email = :e"
-            ),
-            {"th": th, "e": "p2.team1@example.com"},
-        )
-    r = client.post("/v1/auth/password/reset", json={"token": raw, "password": "New-Password-For-Tests-1"})
-    assert r.status_code == 200
-    # old access token must now be rejected (token_version bumped + sessions revoked)
-    r = client.get("/v1/me", headers=headers)
-    assert r.status_code == 401
+    initial_password = "First-Password-Claim-123"
+    first_login = client.post("/v1/auth/login", json={"email": email, "password": initial_password})
+    assert first_login.status_code == 200, first_login.text
+
+    with app_engine.connect() as conn:
+        after = conn.execute(
+            text("SELECT password_hash, status, token_version FROM app.users WHERE lower(email) = :e"),
+            {"e": email},
+        ).mappings().one()
+    assert after["password_hash"] is not None
+    assert after["status"] == "active"
+    assert after["token_version"] == before["token_version"]
+
+    wrong = client.post("/v1/auth/login", json={"email": email, "password": "Wrong-First-Password-123"})
+    assert wrong.status_code == 401
+    assert wrong.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
+
+    unknown = client.post(
+        "/v1/auth/login",
+        json={"email": "not-registered@example.test", "password": initial_password},
+    )
+    assert unknown.status_code == 401
+    assert unknown.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
+
+    # Public activation and self-service password recovery are disabled for this event.
+    assert client.post(
+        "/v1/auth/activate",
+        json={"invite_token": "x" * 32, "password": initial_password, "accept_rules": True},
+    ).status_code == 404
+    assert client.post("/v1/auth/password/reset-request", json={"email": email}).status_code == 404
+    assert client.post(
+        "/v1/auth/password/reset",
+        json={"token": "x" * 32, "password": "A-New-Password-123"},
+    ).status_code == 404
+
+    # A regular organizer cannot create global staff accounts.
+    organizer_login = client.post(
+        "/v1/auth/login",
+        json={"email": "organizer@example.com", "password": "Dev-only!Passw0rd!"},
+    ).json()
+    organizer = TestClient(client.app)
+    organizer.headers.update({"Authorization": f"Bearer {organizer_login['access_token']}"})
+    forbidden = organizer.post(
+        "/v1/auth/register",
+        json={"email": "unauthorized-staff@example.test", "name": "Unauthorized", "role": "reviewer"},
+    )
+    assert forbidden.status_code == 403
+
+
+def test_admin_password_reset_revokes_sessions_and_changes_password(client):
+    admin_login = client.post(
+        "/v1/auth/login",
+        json={"email": "admin@example.com", "password": "Dev-only!Passw0rd!"},
+    ).json()
+    admin = TestClient(client.app)
+    admin.headers.update({"Authorization": f"Bearer {admin_login['access_token']}"})
+    admin.post("/v1/auth/step-up", json={"password": "Dev-only!Passw0rd!"}).raise_for_status()
+
+    staff_email = "reset-target@example.test"
+    create = admin.post(
+        "/v1/auth/register",
+        json={"email": staff_email, "name": "Reset Target", "role": "reviewer"},
+    )
+    assert create.status_code == 201, create.text
+
+    old_password = "Old-Password-For-Claim-123"
+    target_login = client.post("/v1/auth/login", json={"email": staff_email, "password": old_password})
+    assert target_login.status_code == 200, target_login.text
+    target_headers = {"Authorization": f"Bearer {target_login.json()['access_token']}"}
+
+    from app.db import app_engine
+    from sqlalchemy import text
+
+    with app_engine.connect() as conn:
+        target_id, token_version_before = conn.execute(
+            text("SELECT id, token_version FROM app.users WHERE lower(email) = :e"),
+            {"e": staff_email},
+        ).one()
+
+    new_password = "Admin-Assigned-Password-456"
+    reset = admin.post(
+        f"/v1/admin/users/{target_id}/password-reset",
+        json={"password": new_password},
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["email"] == staff_email
+
+    assert client.get("/v1/me", headers=target_headers).status_code == 401
+    assert client.post("/v1/auth/login", json={"email": staff_email, "password": old_password}).status_code == 401
+    assert client.post("/v1/auth/login", json={"email": staff_email, "password": new_password}).status_code == 200
+
     with app_engine.connect() as conn:
         token_version_after = conn.execute(
-            text("SELECT token_version FROM app.users WHERE email = :e"), {"e": "p2.team1@example.com"}
+            text("SELECT token_version FROM app.users WHERE id = :id"),
+            {"id": target_id},
         ).scalar_one()
     assert token_version_after == token_version_before + 1
 
