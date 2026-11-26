@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { api, ApiRequestError } from '../../lib/api'
 import type { AdminEvent, ChallengeVersion } from '../../lib/types'
 import { CATEGORIES, SEVERITIES } from '../../lib/types'
-import { Button, Chip, EmptyState, ErrorBanner, Field, LoadingShell, Panel, StatusChip } from '../../ui/components'
+import { Button, EmptyState, ErrorBanner, Field, LoadingShell, Panel, StatusChip } from '../../ui/components'
 import { adminErrorText, StepUpGateHint, StepUpPanel } from '../../components/StepUp'
 
 const emptyBug = {
@@ -53,7 +53,7 @@ export default function AdminGroundTruth() {
     if (challengeId && rows.some((row) => row.id === challengeId)) return
     if (rows.length) setChallengeId(rows[0].id)
     else setChallengeId('')
-  }, [challengesQ.data, challengeId])
+  }, [eventId, challengesQ.data, challengesQ.isLoading, challengeId])
 
   function resetMessages() {
     setError(null)
