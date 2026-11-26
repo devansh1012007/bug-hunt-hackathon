@@ -61,6 +61,11 @@ export default function AdminGroundTruth() {
     else setChallengeId('')
   }, [eventId, challengesQ.data, challengesQ.isLoading, challengeId])
 
+  useEffect(() => {
+    setEditingFlagId(null)
+    setFlag({ flag_key: '', code: '', points: '25', max_awards: '99' })
+  }, [challengeId])
+
   function resetMessages() {
     setError(null)
     setNotice(null)
@@ -262,7 +267,7 @@ export default function AdminGroundTruth() {
               <input id="flag-key" className="input mono-input" maxLength={40} required value={flag.flag_key} onChange={(e) => setFlag({ ...flag, flag_key: e.target.value })} disabled={!elevated} />
             </Field>
             <Field label="Flag code" htmlFor="flag-code" required={!editingFlagId} hint={editingFlagId ? "Leave empty to keep the existing secret. A new value replaces the stored hash." : "The raw code is sent once to the API and stored as a hash."}>
-              <input id="flag-code" className="input mono-input" minLength={4} maxLength={200} required value={flag.code} onChange={(e) => setFlag({ ...flag, code: e.target.value })} disabled={!elevated} autoComplete="off" />
+              <input id="flag-code" className="input mono-input" minLength={4} maxLength={200} required={!editingFlagId} value={flag.code} onChange={(e) => setFlag({ ...flag, code: e.target.value })} disabled={!elevated} autoComplete="off" />
             </Field>
             <div className="grid-2">
               <Field label="Points" htmlFor="flag-points" required>
@@ -274,7 +279,7 @@ export default function AdminGroundTruth() {
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <Button type="submit" variant="primary" disabled={busy || !elevated || !challengeId || (!editingFlagId && !flag.code.trim())}>{editingFlagId ? 'Save flag changes' : 'Create flag'}</Button>
-              {editingFlagId && <Button type="button" variant="secondary" disabled={busy} onClick={() => { setEditingFlagId(null); setFlag({ flag_key: '', code: '', points: '25', max_awards: '99' }) }}>Cancel edit</Button>}
+              {editingFlagId && <Button type="button" variant="ghost" disabled={busy} onClick={() => { setEditingFlagId(null); setFlag({ flag_key: '', code: '', points: '25', max_awards: '99' }) }}>Cancel edit</Button>}
             </div>
           </form>
           <div className="ruled" style={{ marginTop: 16 }}>
@@ -289,7 +294,7 @@ export default function AdminGroundTruth() {
                   <div className="muted small">{existing.points} points · max {existing.max_awards} awards</div>
                   <div className="muted small">Created {new Date(existing.created_at).toLocaleString()}</div>
                 </div>
-                <Button size="sm" variant="secondary" disabled={!elevated || busy} onClick={() => editFlag(existing)}>Edit</Button>
+                <Button size="sm" variant="ghost" disabled={!elevated || busy} onClick={() => editFlag(existing)}>Edit</Button>
               </div>
             ))}
           </div>
