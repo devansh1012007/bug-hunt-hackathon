@@ -536,23 +536,6 @@ def main(reset: bool) -> None:
                     {"i": str(uuid7()), "t": team_id, "u": uid},
                 )
 
-        invite_tokens = []
-        for email in ["organizer3@example.com"]:
-            raw = secrets.token_urlsafe(32)
-            invite_tokens.append((email, raw))
-            s.execute(
-                text(
-                    "INSERT INTO app.invites (id, event_id, email, token_hash, role, expires_at) VALUES (CAST(:i AS uuid), CAST(:ev AS uuid), :em, :th, 'organizer', :exp)"
-                ),
-                {
-                    "i": str(uuid7()),
-                    "ev": event_id,
-                    "em": email,
-                    "th": security.token_hash(raw),
-                    "exp": now + timedelta(hours=48),
-                },
-            )
-
         s.execute(
             text(
                 "INSERT INTO app.announcements (id, event_id, severity, body, created_by) VALUES (CAST(:i AS uuid), CAST(:e AS uuid), 'info', :b, CAST(:u AS uuid))"
@@ -684,9 +667,6 @@ def main(reset: bool) -> None:
     )
     print("  staff: admin@ / organizer@ / reviewer1@ / reviewer2@ example.com - password Dev-only!Passw0rd!")
     print("  participants: p1..p5.team1@ / p1..p5.team2@ example.com - password Dev-only!Passw0rd!")
-    for email, raw in invite_tokens:
-        print(f"  invite for {email}: {raw}")
-
 
 def _lang(rel: str) -> str:
     ext = rel.rsplit(".", 1)[-1]
