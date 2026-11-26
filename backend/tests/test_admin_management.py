@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi.testclient import TestClient
-
 from conftest import STAFF_PW, login
+from fastapi.testclient import TestClient
 
 
 def _staff_client(client, email: str) -> TestClient:
