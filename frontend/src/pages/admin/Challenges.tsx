@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiRequestError } from '../../lib/api'
-import type { AdminEvent, Assignment, LiveOps } from '../../lib/types'
+import type { AdminEvent, Assignment, ChallengeVersion, LiveOps } from '../../lib/types'
 import { fmtBytes, fmtDateTime } from '../../lib/format'
 import {
   Button,
@@ -56,6 +57,11 @@ export default function AdminChallenges() {
     queryFn: () => api<{ assignments: Assignment[] }>('/v1/assignments'),
     staleTime: 15_000,
   })
+  const versionsQ = useQuery({
+    queryKey: ['admin-challenges', eventId],
+    queryFn: () => api<{ challenges: ChallengeVersion[] }>(`/v1/admin/events/${eventId}/challenges`),
+    enabled: !!eventId,
+  })
 
   const [stepUpUntil, setStepUpUntil] = useState<number | null>(null)
   const elevated = stepUpUntil !== null && stepUpUntil > Date.now()
@@ -108,6 +114,7 @@ export default function AdminChallenges() {
       setLastCreated(res.challenge_id)
       setForm({ slug: '', title: '', instructions: '' })
       void queryClient.invalidateQueries({ queryKey: ['admin-assignments'] })
+      void queryClient.invalidateQueries({ queryKey: ['admin-challenges', eventId] })
     }
   }
 
@@ -176,9 +183,9 @@ export default function AdminChallenges() {
         <span className="exhibit-num">CHALLENGE TOOLS</span>
         <h1 className="display" style={{ margin: 0, fontSize: 'clamp(1.6rem, 4vw, 2.4rem)' }}>Challenge content</h1>
         <p className="muted small" style={{ maxWidth: '78ch' }}>
-          The API exposes no challenge-version listing endpoint, so ids created here are kept in this browser and
-          can also be pasted by hand. Creating, uploading and freezing content requires a fresh identity
-          confirmation (step-up); publishing needs a stage to attach to.
+          Challenge versions are now listed from the event API instead of relying only on browser-local ids.
+          Creating, uploading and freezing content requires a fresh identity confirmation (step-up); publishing
+          requires a stage to attach the sealed version to.
         </p>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <div className="field" style={{ width: 320, maxWidth: '100%' }}>
@@ -204,6 +211,30 @@ export default function AdminChallenges() {
       {error && <ErrorBanner error={error} title="Challenge operation failed" />}
       {eventsQ.isError && <ErrorBanner error={eventsQ.error} onRetry={() => void eventsQ.refetch()} />}
       {eventsQ.isLoading && <LoadingShell label="Loading events" />}
+
+      {eventId && (
+        <Panel exhibit="EX-00" title="Server-side challenge registry">
+          {versionsQ.isLoading && <LoadingShell label="Loading challenge versions" />}
+          {versionsQ.isError && <ErrorBanner error={versionsQ.error} onRetry={() => void versionsQ.refetch()} />}
+          {versionsQ.data?.challenges.length === 0 && <p className="muted small">No challenge versions exist for this event yet.</p>}
+          <div className="ruled">
+            {(versionsQ.data?.challenges ?? []).map((version) => (
+              <div key={version.id} className="kv-row" style={{ alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <strong>{version.title}</strong> <span className="muted small">v{version.version} · {version.slug}</span>
+                  <div className="mono small muted" style={{ overflowWrap: 'anywhere' }}>{version.id}</div>
+                  {version.content_hash && <div className="mono small muted">{version.content_hash}</div>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <StatusChip value={version.status} />
+                  <Button size="sm" onClick={() => setChallengeId(version.id)}>Select</Button>
+                  <Link className="btn btn-ghost btn-sm" to={`/admin/ground-truth?challenge=${encodeURIComponent(version.id)}`}>Ground truth</Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       {eventId && (
         <div className="grid-2">
