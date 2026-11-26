@@ -101,7 +101,7 @@ privacy notice and terms. Engineering: `docs/API_REFERENCE.md`,
   exports, 46/46 E2E + 37/37 pytest, frontend build clean.
 - Deliberately not in v1: participant code execution (no isolated runner;
   ADR-010 fallback), AI scoring (disabled by default, DEC-13), email delivery
-  (invite/reset tokens surface in the organizer console), SSE (5 s polling),
+  (accounts are admin-registered; initial passwords are claimed on first sign-in and resets are admin-only), SSE (5 s polling),
   MFA (step-up is password re-entry; WebAuthn documented as the production
   path). The 50-user capacity claim stays provisional until the load-test
   rehearsal passes (`scripts/load_test.py`,
