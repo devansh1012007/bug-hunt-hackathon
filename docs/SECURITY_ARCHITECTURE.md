@@ -1,4 +1,4 @@
-Status: describes the implementation as of 2026-11-22
+Status: describes the implementation as of 2026-11-26
 
 # Security Architecture
 
@@ -6,12 +6,12 @@ The audience of this event finds bugs for fun (SEC-01): every participant is tre
 
 ## 1. Authentication design
 
-- Passwords: Argon2id via `argon2-cffi`, OWASP-minimum parameters `time_cost=2, memory_cost=19456 KiB, parallelism=1` (`security.py`, AUTH-07). Minimum length 12 enforced at activation and reset. Generic `AUTH_INVALID_CREDENTIALS` on login (ATH-01, no account enumeration).
+- Passwords: Argon2id via `argon2-cffi`, OWASP-minimum parameters `time_cost=2, memory_cost=19456 KiB, parallelism=1` (`security.py`, AUTH-07). Minimum length 12 enforced on first sign-in and admin password reset. Accounts are created only by admins. If a registered account has no password hash, the password supplied on first sign-in is stored as its initial password; otherwise it is verified normally. Unknown emails receive generic `AUTH_INVALID_CREDENTIALS` (ATH-01, no account enumeration).
 - Access tokens: PyJWT HS256 with the algorithm pinned to `settings.jwt_algorithm` in `decode_access_token`, so `alg` confusion and `none` are rejected (AUTH-03). Claims: `iss=bughunt-api` (verified), `aud=bughunt-participant|bughunt-admin` (verified, tried in that fixed order), `sub`, `sid` (session id), `role`, `tv` (token_version), `iat`, `nbf`, `exp`, `jti`. TTL 600 s. HS256 is acceptable for the single-service D1 profile; EdDSA with a key file is the documented production upgrade path (`config.py` comment).
-- Token lifecycle vs. server state: every authenticated request re-reads `app.users` + `app.sessions` (`deps.get_principal`), so password reset (`token_version` bump), logout, session revocation and disqualification revoke access tokens instantly without a denylist (AUTH-01).
+- Token lifecycle vs. server state: every authenticated request re-reads `app.users` + `app.sessions` (`deps.get_principal`), so an admin password reset (`token_version` bump), logout, session revocation and disqualification revoke access tokens instantly without a denylist (AUTH-01). Public activation and self-service reset endpoints are not registered; the legacy invite and password-reset token tables are dropped by migration 0004.
 - Token storage: the SPA keeps the access token in a module variable (memory only, AUTH-02); no localStorage. The refresh token never touches JavaScript: HttpOnly cookie `bhctf_refresh`, `SameSite=Strict`, `path=/v1/auth/refresh` (scoped so it is not sent with any other request), `Secure` when `ENVIRONMENT=production`, `max_age` = refresh TTL (3 days default).
 - Sessions: max 2 live sessions per user (AUTH-10). At login the server takes a per-user row lock (concurrent logins cannot exceed the cap), reclaims zombie sessions whose refresh tokens are all expired/revoked, and if still at the cap evicts the oldest live session (session revoked, token family revoked, `auth.session_evicted` audit entry). Sign-in is never blocked by stale sessions. Session rows carry hashed IPs and a truncated user agent; `GET /v1/me/sessions` lets a user review and revoke their own devices.
-- Revocation: password reset bumps `users.token_version` and revokes all sessions + refresh families (ATH-03); disqualified users get 403 on every request.
+- Revocation: an admin password reset bumps `users.token_version` and revokes all sessions + refresh families (ATH-03); disqualified users get 403 on every request.
 
 ## 2. Refresh rotation and reuse detection (AUTH-04)
 
@@ -71,7 +71,7 @@ Full detail in `GROUND_TRUTH_ISOLATION.md`. Summary: the answer key lives in sch
 | Verdict oracle (INT-01) | Probe line ranges to read the answer key from feedback | Hidden feedback until release, caps, cooldown, release-only capped penalty | Reviewer notes could leak hints after release; review the release payload before publishing |
 | IDOR (SEC-02) | Read another team's report | Token-scoped queries, 404 discipline, UUID ids, automated tests | Double-review flow not wired; reviewer queue shows all teams by design |
 | Replay (DAT-02) | Duplicated submissions from retries | `UNIQUE (author_id, idempotency_key)` + canonical payload hash; same-payload replay returns the original receipt even after deadline | None known; covered by tests |
-| Enumeration (ATH-01) | Discover valid emails | Generic login errors, generic reset response, invite/reset tokens hashed at rest, 404 for invalid tokens | Invite tokens appear in organizer API responses (by design, no email transport exists) |
+| Account discovery / first claim (ATH-01) | Discover valid emails or claim an account before its intended user | Unknown login emails receive the same generic credential error; registration is admin-only; no invite or self-service reset tokens are issued and migration 0004 drops their legacy tables | Accepted event-specific risk: the first person who knows a registered email can claim its initial password because mailbox ownership is not verified. Admins must distribute registered emails through a controlled channel |
 | Admin takeover (AUTH-09) | Stolen organizer session | Step-up within 5 min for gt routes, 2-session cap, instant revocation via token_version | No MFA yet; Cloudflare Access + WebAuthn planned for D1 |
 | Upload abuse (SEC-03) | Malicious challenge upload | Organizer-only + step-up, 512 KiB cap, path normalization, inert text storage | Multi-file zip ingestion not implemented (one file per request) |
 | Report text attacks reviewer (EVA-05) | XSS/HTML in report payload | Participant content stored as JSONB, rendered as plain text by `PlainMarkdown`; no `dangerouslySetInnerHTML` in `frontend/src`; `X-Content-Type-Options: nosniff` on all responses | No strict CSP header yet on the SPA host (add at the edge in D1) |
