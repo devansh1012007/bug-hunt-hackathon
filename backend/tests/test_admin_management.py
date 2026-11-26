@@ -52,7 +52,7 @@ def test_organizer_setup_and_admin_participant_lifecycle(client):
     denied = organizer.post(
         f"/v1/admin/events/{event_id}/participants",
         json={
-            "email": f"not-admin-{uuid.uuid4().hex[:8]}@example.test",
+            "email": f"not-admin-{uuid.uuid4().hex[:8]}@example.com",
             "name": "Not an Admin",
             "team_id": team_id,
         },
@@ -63,7 +63,7 @@ def test_organizer_setup_and_admin_participant_lifecycle(client):
     admin = _staff_client(client, "admin@example.com")
     admin.post("/v1/auth/step-up", json={"password": STAFF_PW}).raise_for_status()
 
-    participant_email = f"registered-{uuid.uuid4().hex[:10]}@example.test"
+    participant_email = f"registered-{uuid.uuid4().hex[:10]}@example.com"
     registration = admin.post(
         f"/v1/admin/events/{event_id}/participants",
         json={"email": participant_email, "name": "Registered Participant", "team_id": team_id},
