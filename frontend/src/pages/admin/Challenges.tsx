@@ -13,6 +13,7 @@ import {
   LoadingShell,
   Panel,
   KVRow,
+  StatusChip,
 } from '../../ui/components'
 import { FileIcon } from '../../ui/icons'
 import { StepUpGateHint, StepUpPanel } from '../../components/StepUp'
