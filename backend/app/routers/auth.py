@@ -48,7 +48,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=12, max_length=200)
 
 
 @router.post("/auth/login")
@@ -60,7 +60,8 @@ def login(body: LoginIn, request: Request, response: Response):
         user = (
             s.execute(
                 text(
-                    "SELECT id, email, name, role, status, password_hash, token_version FROM app.users WHERE lower(email) = :e"
+                    "SELECT id, email, name, role, status, password_hash, token_version "
+                    "FROM app.users WHERE lower(email) = :e FOR UPDATE"
                 ),
                 {"e": body.email.lower()},
             )
@@ -74,10 +75,16 @@ def login(body: LoginIn, request: Request, response: Response):
         # becomes your password. If you have a password, it is checked.
         # NOTE: this is a risk we are willing to take for this event.
         if user is None:
-            # Unregistered email: reject generically (no account enumeration).
+            # Only admin-registered accounts can sign in. Keep the rejection generic.
             raise ApiError("AUTH_INVALID_CREDENTIALS")
-        elif not user["password_hash"]:
-            # Registered but no password set yet: the password typed now becomes the password.
+        if user["status"] == "disqualified":
+            raise ApiError("AUTH_FORBIDDEN", message="This account was disqualified. Contact the organizers.")
+        if user["status"] not in ("active", "pending"):
+            raise ApiError("AUTH_NOT_ACTIVATED")
+        if not user["password_hash"]:
+            # Event-specific policy: the first successful email sign-in sets the password.
+            # This deliberately does not verify mailbox ownership. Admin registration is
+            # the trust boundary, and the event accepts the risk of first-claim by email.
             pw_hash = security.hash_password(body.password)
             s.execute(
                 text("UPDATE app.users SET password_hash = :pw, status = 'active' WHERE id = CAST(:uid AS uuid)"),
@@ -85,10 +92,7 @@ def login(body: LoginIn, request: Request, response: Response):
             )
             user = {**user, "password_hash": pw_hash, "status": "active"}
         elif not security.verify_password(body.password, user["password_hash"]):
-            # generic failure: no enumeration (AUTH-1)
             raise ApiError("AUTH_INVALID_CREDENTIALS")
-        if user["status"] == "disqualified":
-            raise ApiError("AUTH_FORBIDDEN", message="This account was disqualified. Contact the organizers.")
 
         # Concurrent session limit (AUTH-10), hardened with reclaim + eviction:
         # 1) Reclaim zombie sessions: a session whose refresh tokens are all
@@ -195,22 +199,18 @@ def login(body: LoginIn, request: Request, response: Response):
 class RegisterIn(BaseModel):
     email: EmailStr
     name: str = Field(min_length=2, max_length=160)
-    password: str = Field(min_length=12, max_length=200)
     role: str = Field(default="participant", pattern="^(participant|reviewer|organizer|admin)$")
 
 
 @router.post("/auth/register", status_code=201)
 def register(body: RegisterIn, request: Request, p: Principal = Depends(require_admin)):
-    """Admin-only registration. Creates an active account with a password.
-    No JWT is issued here; the new user signs in via POST /auth/login to get tokens.
-    """
+    """Admin-only account registration. The user chooses the initial password at first sign-in."""
     if body.role not in ("participant", "reviewer", "organizer", "admin"):
         raise ApiError("VALIDATION_ERROR", details={"role": "participant|reviewer|organizer|admin"})
     # Only an admin may create admin/organizer accounts.
     if body.role in ("admin", "organizer") and p.role != "admin":
         raise ApiError("AUTH_FORBIDDEN", message="Only an admin can create organizer or admin accounts.")
     rate_limit(f"register:{request.client.host if request.client else ''}", limit=10, window_s=60)
-    pw_hash = security.hash_password(body.password)
     with app_session() as s:
         tenant = s.execute(text("SELECT id FROM app.tenants ORDER BY created_at LIMIT 1")).first()
         if tenant is None:
@@ -219,7 +219,7 @@ def register(body: RegisterIn, request: Request, p: Principal = Depends(require_
             s.execute(
                 text(
                     "INSERT INTO app.users (id, tenant_id, email, name, role, password_hash, status, registration_id) "
-                    "VALUES (CAST(:id AS uuid), CAST(:t AS uuid), :email, :name, :role, :pw, 'active', :reg)"
+                    "VALUES (CAST(:id AS uuid), CAST(:t AS uuid), :email, :name, :role, NULL, 'active', :reg)"
                 ),
                 {
                     "id": str(uuid7()),
@@ -227,7 +227,6 @@ def register(body: RegisterIn, request: Request, p: Principal = Depends(require_
                     "email": body.email.lower(),
                     "name": body.name,
                     "role": body.role,
-                    "pw": pw_hash,
                     "reg": str(uuid7())[:8],
                 },
             )
@@ -244,7 +243,12 @@ def register(body: RegisterIn, request: Request, p: Principal = Depends(require_
             request_id=request.state.request_id,
             details={"email": body.email.lower(), "role": body.role},
         )
-    return {"ok": True, "email": body.email.lower(), "message": "Account created. The user can now sign in."}
+    return {
+        "ok": True,
+        "email": body.email.lower(),
+        "message": "Account registered. The user sets their password on first sign-in.",
+        "password_setup_required": True,
+    }
 
 
 @router.post("/auth/refresh")
@@ -387,7 +391,8 @@ class ActivateIn(BaseModel):
     accept_rules: bool
 
 
-@router.post("/auth/activate")
+# DISABLED FOR THIS EVENT: accounts are registered by admins and activate on first sign-in.
+# @router.post("/auth/activate")
 def activate(body: ActivateIn, request: Request):
     if not body.accept_rules:
         raise ApiError("RULES_NOT_ACCEPTED")
@@ -497,7 +502,8 @@ class ResetRequestIn(BaseModel):
     email: EmailStr
 
 
-@router.post("/auth/password/reset-request")
+# DISABLED: password reset is available only through the admin console.
+# @router.post("/auth/password/reset-request")
 def reset_request(body: ResetRequestIn, request: Request):
     rate_limit(f"reset:{request.client.host if request.client else ''}", limit=3, window_s=600)
     with app_session() as s:
@@ -528,7 +534,8 @@ class ResetIn(BaseModel):
     password: str = Field(min_length=12, max_length=200)
 
 
-@router.post("/auth/password/reset")
+# DISABLED: password reset is available only through the admin console.
+# @router.post("/auth/password/reset")
 def reset(body: ResetIn, request: Request):
     th = security.token_hash(body.token)
     with app_session() as s:
