@@ -415,7 +415,12 @@ export default function AdminManagement() {
                         <td>{participant.team_name ?? 'Unassigned'}</td>
                         <td>{participant.role}</td>
                         <td><StatusChip value={participant.status} /></td>
-                        <td><Chip tone={participant.activated ? 'ok' : 'warn'}>{participant.activated ? 'activated' : 'pending'}</Chip><div className="muted small">{fmtDateTime(participant.expires_at)}</div></td>
+                        <td>
+                          <Chip tone={participant.activated ? 'ok' : 'warn'}>{participant.activated ? 'activated' : 'pending'}</Chip>
+                          <div className="muted small">
+                            {participant.expires_at ? `Expires ${fmtDateTime(participant.expires_at)}` : participant.activated ? 'Active member' : 'No expiry recorded'}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
