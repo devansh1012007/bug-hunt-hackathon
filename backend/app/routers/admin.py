@@ -1195,43 +1195,190 @@ def add_bug(challenge_id: str, body: BugIn, request: Request, p: Principal = Dep
 
 
 class FlagIn(BaseModel):
-    flag_key: str = Field(max_length=40)
+    flag_key: str = Field(min_length=1, max_length=40)
     code: str = Field(min_length=4, max_length=200)
     points: float = Field(gt=0, le=500)
     max_awards: int = Field(default=99, ge=1)
+
+
+class FlagPatchIn(BaseModel):
+    flag_key: str | None = Field(default=None, min_length=1, max_length=40)
+    code: str | None = Field(default=None, min_length=4, max_length=200)
+    points: float | None = Field(default=None, gt=0, le=500)
+    max_awards: int | None = Field(default=None, ge=1)
+
+
+@router.get("/admin/challenges/{challenge_id}/ground-truth/flags")
+def list_ground_truth_flags(
+    challenge_id: str,
+    p: Principal = Depends(step_up_verified),
+):
+    """List editable flag metadata only. Flag hashes and plaintext codes never leave gt storage."""
+    with app_session() as s:
+        if s.execute(
+            text("SELECT 1 FROM app.challenge_versions WHERE id = CAST(:c AS uuid)"),
+            {"c": challenge_id},
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+    with gt_session() as gts:
+        rows = (
+            gts.execute(
+                text(
+                    "SELECT id, flag_key, points, max_awards, position_label, created_at "
+                    "FROM gt.gt_flags WHERE challenge_version_id = CAST(:c AS uuid) "
+                    "ORDER BY created_at, flag_key"
+                ),
+                {"c": challenge_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {"flags": [dict(row) for row in rows]}
 
 
 @router.post("/admin/challenges/{challenge_id}/ground-truth/flags", status_code=201)
 def add_flag(challenge_id: str, body: FlagIn, request: Request, p: Principal = Depends(step_up_verified)):
     from ..security import flag_code_hash
 
-    with gt_session() as gts:
-        gts.execute(
-            text(
-                "INSERT INTO gt.gt_flags (id, challenge_version_id, flag_key, code_hash, points, max_awards) "
-                "VALUES (CAST(:id AS uuid), CAST(:c AS uuid), :k, :h, :pts, :ma) "
-                "ON CONFLICT (challenge_version_id, code_hash) DO NOTHING"
-            ),
-            {
-                "id": str(uuid7()),
-                "c": challenge_id,
-                "k": body.flag_key,
-                "h": flag_code_hash(body.code),
-                "pts": body.points,
-                "ma": body.max_awards,
-            },
-        )
-        audit_write(
-            gts,
-            actor_id=p.id,
-            actor_role=p.role,
-            action="gt.flag_added",
-            entity_type="gt_flag",
-            entity_id=body.flag_key,
-            request_id=request.state.request_id,
-            event_scope=f"challenge:{challenge_id}",
-        )
-    return {"ok": True}
+    with app_session() as s:
+        challenge = s.execute(
+            text("SELECT status FROM app.challenge_versions WHERE id = CAST(:c AS uuid)"),
+            {"c": challenge_id},
+        ).first()
+        if challenge is None:
+            raise ApiError("NOT_FOUND")
+        if challenge[0] not in ("draft", "reviewed"):
+            raise ApiError("GROUND_TRUTH_LOCKED")
+
+    try:
+        with gt_session() as gts:
+            existing_key = gts.execute(
+                text(
+                    "SELECT 1 FROM gt.gt_flags WHERE challenge_version_id = CAST(:c AS uuid) AND flag_key = :k"
+                ),
+                {"c": challenge_id, "k": body.flag_key},
+            ).first()
+            if existing_key:
+                raise ApiError("VALIDATION_ERROR", details={"flag_key": "This flag key already exists."})
+            flag_id = gts.execute(
+                text(
+                    "INSERT INTO gt.gt_flags (id, challenge_version_id, flag_key, code_hash, points, max_awards) "
+                    "VALUES (CAST(:id AS uuid), CAST(:c AS uuid), :k, :h, :pts, :ma) "
+                    "ON CONFLICT (challenge_version_id, code_hash) DO NOTHING RETURNING id"
+                ),
+                {
+                    "id": str(uuid7()),
+                    "c": challenge_id,
+                    "k": body.flag_key,
+                    "h": flag_code_hash(body.code),
+                    "pts": body.points,
+                    "ma": body.max_awards,
+                },
+            ).scalar_one_or_none()
+            if flag_id is None:
+                raise ApiError("VALIDATION_ERROR", details={"code": "This flag code already exists for this challenge."})
+            audit_write(
+                gts,
+                actor_id=p.id,
+                actor_role=p.role,
+                action="gt.flag_added",
+                entity_type="gt_flag",
+                entity_id=str(flag_id),
+                request_id=request.state.request_id,
+                event_scope=f"challenge:{challenge_id}",
+                details={"flag_key": body.flag_key},
+            )
+    except IntegrityError:
+        raise ApiError("VALIDATION_ERROR", details={"flag_key": "This flag key or code already exists."}) from None
+    return {"flag_id": str(flag_id), "ok": True}
+
+
+@router.patch("/admin/challenges/{challenge_id}/ground-truth/flags/{flag_id}")
+def update_ground_truth_flag(
+    challenge_id: str,
+    flag_id: str,
+    body: FlagPatchIn,
+    request: Request,
+    p: Principal = Depends(step_up_verified),
+):
+    from ..security import flag_code_hash
+
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise ApiError("VALIDATION_ERROR", details={"body": "Provide at least one field to update."})
+
+    with app_session() as s:
+        challenge = s.execute(
+            text("SELECT status FROM app.challenge_versions WHERE id = CAST(:c AS uuid)"),
+            {"c": challenge_id},
+        ).first()
+        if challenge is None:
+            raise ApiError("NOT_FOUND")
+        if challenge[0] not in ("draft", "reviewed"):
+            raise ApiError("GROUND_TRUTH_LOCKED")
+
+    try:
+        with gt_session() as gts:
+            current = (
+                gts.execute(
+                    text(
+                        "SELECT id, flag_key, code_hash, points, max_awards "
+                        "FROM gt.gt_flags WHERE id = CAST(:id AS uuid) "
+                        "AND challenge_version_id = CAST(:c AS uuid) FOR UPDATE"
+                    ),
+                    {"id": flag_id, "c": challenge_id},
+                )
+                .mappings()
+                .first()
+            )
+            if current is None:
+                raise ApiError("NOT_FOUND")
+
+            flag_key = changes.get("flag_key", current["flag_key"])
+            code_hash = flag_code_hash(changes["code"]) if "code" in changes else current["code_hash"]
+            points = changes.get("points", current["points"])
+            max_awards = changes.get("max_awards", current["max_awards"])
+
+            duplicate_key = gts.execute(
+                text(
+                    "SELECT 1 FROM gt.gt_flags WHERE challenge_version_id = CAST(:c AS uuid) "
+                    "AND flag_key = :k AND id <> CAST(:id AS uuid)"
+                ),
+                {"c": challenge_id, "k": flag_key, "id": flag_id},
+            ).first()
+            if duplicate_key:
+                raise ApiError("VALIDATION_ERROR", details={"flag_key": "This flag key already exists."})
+            duplicate_code = gts.execute(
+                text(
+                    "SELECT 1 FROM gt.gt_flags WHERE challenge_version_id = CAST(:c AS uuid) "
+                    "AND code_hash = :h AND id <> CAST(:id AS uuid)"
+                ),
+                {"c": challenge_id, "h": code_hash, "id": flag_id},
+            ).first()
+            if duplicate_code:
+                raise ApiError("VALIDATION_ERROR", details={"code": "This flag code already exists."})
+
+            gts.execute(
+                text(
+                    "UPDATE gt.gt_flags SET flag_key = :k, code_hash = :h, points = :pts, max_awards = :ma "
+                    "WHERE id = CAST(:id AS uuid) AND challenge_version_id = CAST(:c AS uuid)"
+                ),
+                {"k": flag_key, "h": code_hash, "pts": points, "ma": max_awards, "id": flag_id, "c": challenge_id},
+            )
+            audit_write(
+                gts,
+                actor_id=p.id,
+                actor_role=p.role,
+                action="gt.flag_updated",
+                entity_type="gt_flag",
+                entity_id=flag_id,
+                request_id=request.state.request_id,
+                event_scope=f"challenge:{challenge_id}",
+                details={"flag_key": flag_key, "code_changed": "code" in changes},
+            )
+    except IntegrityError:
+        raise ApiError("VALIDATION_ERROR", details={"flag": "This flag key or code already exists."}) from None
+    return {"ok": True, "flag_id": flag_id}
 
 
 @router.post("/admin/challenges/{challenge_id}/ground-truth/test-results")
