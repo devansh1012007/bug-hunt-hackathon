@@ -234,6 +234,7 @@ export default function AdminManagement() {
         method: 'PATCH',
         body: { team_id },
       })
+      setParticipantTeams((old) => ({ ...old, [participantId]: team_id }))
       setNotice('Participant team assignment updated.')
       await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
       await queryClient.invalidateQueries({ queryKey: ['admin-teams', eventId] })
@@ -641,7 +642,7 @@ export default function AdminManagement() {
                 <Field label="Participant (optional)" htmlFor="time-user" hint="Leave empty to record a stage-wide adjustment.">
                   <select id="time-user" className="select" value={timeForm.user_id} onChange={(e) => setTimeForm({ ...timeForm, user_id: e.target.value })}>
                     <option value="">Whole stage</option>
-                    {participants.filter((participant) => participant.id).map((participant, index) => <option key={`${participant.id}-${index}`} value={participant.id ?? ''}>{participant.email}</option>)}
+                    {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.email}</option>)}
                   </select>
                 </Field>
               </div>
