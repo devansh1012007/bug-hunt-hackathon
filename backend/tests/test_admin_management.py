@@ -52,7 +52,12 @@ def test_organizer_setup_apis_cover_stages_teams_invites_and_revisions(client):
 
     roster = organizer.get(f"/v1/admin/events/{event_id}/participants")
     assert roster.status_code == 200, roster.text
-    participant = next(row for row in roster.json()["participants"] if row["email"] == invited_email)
+    event_roster = roster.json()["participants"]
+    seeded_member = next(row for row in event_roster if row["email"] == "p1.team1@example.com")
+    assert seeded_member["team_name"] == "Team Lambda"
+    assert seeded_member["activated"] is True
+    assert seeded_member["expires_at"] is None
+    participant = next(row for row in event_roster if row["email"] == invited_email)
     assert participant["id"] is None
     assert participant["status"] == "invited"
     assert participant["activated"] is False
