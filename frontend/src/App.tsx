@@ -5,7 +5,6 @@ import Rules from './pages/Rules'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 import Login from './pages/Login'
-import { ActivateInvite, PasswordReset } from './pages/Access'
 import NotFound from './pages/NotFound'
 import Lobby from './pages/participant/Lobby'
 import Workspace from './pages/participant/Workspace'
@@ -33,8 +32,10 @@ export default function App() {
       </Route>
 
       <Route path="/login" element={<Login />} />
-      <Route path="/activate" element={<ActivateInvite />} />
-      <Route path="/password-reset" element={<PasswordReset />} />
+      {/* Disabled for this event: admin registration + first sign-in password setup. */}
+      {/* <Route path="/activate" element={<ActivateInvite />} /> */}
+      {/* Disabled: only admins can reset account passwords from the organizer console. */}
+      {/* <Route path="/password-reset" element={<PasswordReset />} /> */}
 
       {/* Participant console */}
       <Route
