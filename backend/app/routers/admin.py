@@ -1061,12 +1061,12 @@ def time_adjustment(event_id: str, body: dict, request: Request, p: Principal = 
     if reason_code not in ("ACCOMMODATION", "OUTAGE", "DEVICE_FAILURE", "OTHER"):
         raise ApiError("VALIDATION_ERROR", details={"reason_code": "ACCOMMODATION|OUTAGE|DEVICE_FAILURE|OTHER"})
     if abs(delta) > 86400:
-        raise ApiError("VALIDATION_ERROR", details={"delta_seconds": "Time adjustments must be within +/- 86400 seconds."})
+        raise ApiError(
+            "VALIDATION_ERROR", details={"delta_seconds": "Time adjustments must be within +/- 86400 seconds."}
+        )
     with app_session() as s:
         stage = s.execute(
-            text(
-                "SELECT 1 FROM app.stages WHERE id = CAST(:s AS uuid) AND event_id = CAST(:e AS uuid)"
-            ),
+            text("SELECT 1 FROM app.stages WHERE id = CAST(:s AS uuid) AND event_id = CAST(:e AS uuid)"),
             {"s": stage_id, "e": event_id},
         ).first()
         if stage is None:
