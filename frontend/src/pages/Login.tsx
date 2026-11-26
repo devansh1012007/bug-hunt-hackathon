@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth, homePathFor } from '../lib/auth'
 import { ApiRequestError } from '../lib/api'
 import { Button, ErrorBanner, Field, Panel } from '../ui/components'
@@ -85,14 +85,11 @@ export default function Login() {
           </form>
         </Panel>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }} className="small">
-          <Link to="/password-reset">Forgot password?</Link>
-          <Link to="/activate">Activate an invitation</Link>
-        </div>
-
         <p className="muted small">
-          No account yet? Just sign in with your email id - your account is created on first sign-in. The server
-          rejects wrong credentials with one generic message; it never reveals whether an email exists.
+          Not registered? Contact an administrator. Accounts are created only by admins. On the first sign-in for
+          a registered account with no password, the password entered here becomes that account's password.
+          Later sign-ins verify it normally. This event deliberately accepts the risk that the first person who
+          knows a registered email can claim its initial password. Password resets are performed by an admin.
         </p>
       </div>
     </div>
