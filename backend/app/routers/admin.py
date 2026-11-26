@@ -1,7 +1,7 @@
 """Organizer/admin endpoints.
 
 Sections implemented (spec ADM-*): events + lifecycle, config freeze,
-stages (arm/start/pause/resume/extend/end), teams, participants + invites,
+stages (arm/start/pause/resume/extend/end), teams, admin-managed participants,
 challenges (upload files, freeze, seal, publish), ground truth (gt_admin
 session, step-up required), announcements, kill switches, exports, audit
 viewer, readiness, system health, scoring test results, rescoring/adjustments,
@@ -22,6 +22,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from .. import security
 from ..audit import audit_verify, audit_write
 from ..config import settings
 from ..db import app_session, gt_session, health_probe, uuid7
@@ -834,7 +835,7 @@ def admin_reset_user_password(
                 "UPDATE app.users SET password_hash = :pw, status = 'active', "
                 "token_version = token_version + 1 WHERE id = CAST(:u AS uuid)"
             ),
-            {"pw": __import__("app.security", fromlist=["hash_password"]).hash_password(body.password), "u": user_id},
+            {"pw": security.hash_password(body.password), "u": user_id},
         )
         s.execute(
             text("UPDATE app.sessions SET revoked_at = now() WHERE user_id = CAST(:u AS uuid) AND revoked_at IS NULL"),
@@ -876,46 +877,6 @@ def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
                     "JOIN app.users u ON u.id = tm.user_id "
                     "WHERE t.event_id = CAST(:e AS uuid) "
                     "ORDER BY u.email LIMIT 500"
-                ),
-                {"e": event_id},
-            )
-            .mappings()
-            .all()
-        )
-    return {"participants": [dict(r) for r in rows]}
-
-
-@router.get("/admin/events/{event_id}/participants")
-def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
-    """List event team members and invitation-backed users without a team membership."""
-    with app_session() as s:
-        rows = (
-            s.execute(
-                text(
-                    "WITH member_rows AS ("
-                    " SELECT u.id, u.email, u.name, u.role, u.status, t.id AS team_id, t.name AS team_name, "
-                    " (u.status = 'active') AS activated, u.created_at, NULL::timestamptz AS expires_at "
-                    " FROM app.team_members tm "
-                    " JOIN app.teams t ON t.id = tm.team_id "
-                    " JOIN app.users u ON u.id = tm.user_id "
-                    " WHERE t.event_id = CAST(:e AS uuid)"
-                    "), latest_invites AS ("
-                    " SELECT DISTINCT ON (lower(i.email)) i.id, i.event_id, i.email, i.role, i.team_id, "
-                    " i.used_at, i.created_at, i.expires_at "
-                    " FROM app.invites i WHERE i.event_id = CAST(:e AS uuid) "
-                    " ORDER BY lower(i.email), i.created_at DESC, i.id DESC"
-                    "), invite_rows AS ("
-                    " SELECT u.id, i.email, u.name, i.role, COALESCE(u.status, 'invited') AS status, "
-                    " invited_team.id AS team_id, invited_team.name AS team_name, "
-                    " i.used_at IS NOT NULL AS activated, i.created_at, i.expires_at "
-                    " FROM latest_invites i LEFT JOIN app.users u ON lower(u.email) = lower(i.email) "
-                    " LEFT JOIN app.teams invited_team ON invited_team.id = i.team_id "
-                    " WHERE NOT EXISTS ("
-                    "  SELECT 1 FROM app.team_members tm JOIN app.teams t ON t.id = tm.team_id "
-                    "  WHERE tm.user_id = u.id AND t.event_id = i.event_id"
-                    " )"
-                    ") SELECT * FROM member_rows UNION ALL SELECT * FROM invite_rows "
-                    "ORDER BY created_at DESC LIMIT 500"
                 ),
                 {"e": event_id},
             )
