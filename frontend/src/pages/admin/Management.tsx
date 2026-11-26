@@ -529,9 +529,10 @@ export default function AdminManagement() {
                 <Button type="submit" variant="danger" disabled={scoreBusy || !scoreElevated || !scoreForm.confirmed || !scoreForm.team_id || !stageId || !scoreForm.reason.trim() || !Number(scoreForm.points)}>
                   {scoreBusy ? 'Recording' : 'Append score adjustment'}
                 </Button>
-                <p className="muted small">This control is hidden from organizers and requires an admin role on the server.</p>
+                <p className="muted small">This control is restricted to administrators and requires a fresh password confirmation. The server enforces both checks.</p>
               </form>
             </Panel>
+            </>
           )}
         </>
       )}
