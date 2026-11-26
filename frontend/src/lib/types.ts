@@ -27,7 +27,7 @@ export interface Me extends User {
 
 export interface LoginResponse {
   access_token: string
-  expires_at: string
+  expires_at: string | null
   server_time: string
   user: User
 }
