@@ -1364,8 +1364,10 @@ def resolve_dispute(dispute_id: str, body: dict, request: Request, p: Principal 
 
 
 @router.post("/admin/adjustments")
-def manual_adjustment(body: dict, request: Request, p: Principal = Depends(require_admin)):
-    """Admin-only manual score adjustment (audit reason required; ADM-RS)."""
+def manual_adjustment(body: dict, request: Request, p: Principal = Depends(step_up_verified)):
+    """Admin-only, step-up-protected manual score adjustment (audit reason required; ADM-RS)."""
+    if p.role != "admin":
+        raise ApiError("AUTH_FORBIDDEN")
     stage_id = body.get("stage_id")
     team_id = body.get("team_id")
     points = float(body.get("points", 0))
@@ -1379,6 +1381,11 @@ def manual_adjustment(body: dict, request: Request, p: Principal = Depends(requi
         tenant_id = s.execute(
             text("SELECT tenant_id FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": str(event_id)}
         ).scalar_one()
+        team_event = s.execute(
+            text("SELECT event_id FROM app.teams WHERE id = CAST(:t AS uuid)"), {"t": team_id}
+        ).scalar_one_or_none()
+        if str(team_event) != str(event_id):
+            raise ApiError("VALIDATION_ERROR", details={"team_id": "Team must belong to the selected stage event."})
         add_ledger_entry(
             s,
             tenant_id=str(tenant_id),
