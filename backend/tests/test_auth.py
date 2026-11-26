@@ -27,7 +27,7 @@ def test_first_sign_in_claims_password_only_for_admin_registered_accounts(client
     admin = TestClient(client.app)
     admin.headers.update({"Authorization": f"Bearer {admin_login.json()['access_token']}"})
 
-    email = "first-claim@example.test"
+    email = "first-claim@example.com"
     registration = admin.post(
         "/v1/auth/register",
         json={"email": email, "name": "First Claim User", "role": "reviewer"},
@@ -65,7 +65,7 @@ def test_first_sign_in_claims_password_only_for_admin_registered_accounts(client
 
     unknown = client.post(
         "/v1/auth/login",
-        json={"email": "not-registered@example.test", "password": initial_password},
+        json={"email": "not-registered@example.com", "password": initial_password},
     )
     assert unknown.status_code == 401
     assert unknown.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
@@ -90,7 +90,7 @@ def test_first_sign_in_claims_password_only_for_admin_registered_accounts(client
     organizer.headers.update({"Authorization": f"Bearer {organizer_login['access_token']}"})
     forbidden = organizer.post(
         "/v1/auth/register",
-        json={"email": "unauthorized-staff@example.test", "name": "Unauthorized", "role": "reviewer"},
+        json={"email": "unauthorized-staff@example.com", "name": "Unauthorized", "role": "reviewer"},
     )
     assert forbidden.status_code == 403
 
@@ -104,7 +104,7 @@ def test_admin_password_reset_revokes_sessions_and_changes_password(client):
     admin.headers.update({"Authorization": f"Bearer {admin_login['access_token']}"})
     admin.post("/v1/auth/step-up", json={"password": "Dev-only!Passw0rd!"}).raise_for_status()
 
-    staff_email = "reset-target@example.test"
+    staff_email = "reset-target@example.com"
     create = admin.post(
         "/v1/auth/register",
         json={"email": staff_email, "name": "Reset Target", "role": "reviewer"},
@@ -151,26 +151,34 @@ def test_step_up_required_for_sensitive_admin_routes_and_safe_flag_crud(client):
     ).json()
     oc = TestClient(client.app)
     oc.headers.update({"Authorization": f"Bearer {org['access_token']}"})
-    challenge_id = _any_challenge_id(oc)
+    sealed_challenge_id = _any_challenge_id(oc)
 
     # Ground-truth authoring and reads require step-up.
     denied = oc.post(
-        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
+        f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags",
         json={"flag_key": "FLAG-TEST", "code": "FLAG{step_up}", "points": 5},
     )
     assert denied.status_code == 403
     assert denied.json()["error"]["code"] == "ADMIN_STEP_UP_REQUIRED"
-    assert oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").status_code == 403
+    assert oc.get(f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags").status_code == 403
 
     oc.post("/v1/auth/step-up", json={"password": "Dev-only!Passw0rd!"}).raise_for_status()
+    event_id = oc.get("/v1/admin/events").json()["events"][0]["id"]
+    draft_challenge = oc.post(
+        f"/v1/admin/events/{event_id}/challenges",
+        json={"slug": "gt-flag-crud-test", "title": "Ground truth flag CRUD test"},
+    )
+    assert draft_challenge.status_code == 201, draft_challenge.text
+    challenge_id = draft_challenge.json()["challenge_id"]
+
     created = oc.post(
-        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
+        f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags",
         json={"flag_key": "FLAG-TEST", "code": "FLAG{step_up}", "points": 5, "max_awards": 3},
     )
     assert created.status_code == 201, created.text
     flag_id = created.json()["flag_id"]
 
-    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags")
+    listed = oc.get(f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags")
     assert listed.status_code == 200, listed.text
     flags = listed.json()["flags"]
     flag = next(row for row in flags if row["id"] == flag_id)
@@ -185,7 +193,7 @@ def test_step_up_required_for_sensitive_admin_routes_and_safe_flag_crud(client):
         json={"flag_key": "FLAG-TEST-UPDATED", "points": 7.5, "max_awards": 9},
     )
     assert updated.status_code == 200, updated.text
-    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").json()["flags"]
+    listed = oc.get(f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags").json()["flags"]
     flag = next(row for row in listed if row["id"] == flag_id)
     assert flag["flag_key"] == "FLAG-TEST-UPDATED"
     assert float(flag["points"]) == 7.5
@@ -197,13 +205,13 @@ def test_step_up_required_for_sensitive_admin_routes_and_safe_flag_crud(client):
         json={"code": "FLAG{new_secret_code}", "points": 8},
     )
     assert replaced_code.status_code == 200, replaced_code.text
-    listed = oc.get(f"/v1/admin/challenges/{challenge_id}/ground-truth/flags").json()["flags"]
+    listed = oc.get(f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags").json()["flags"]
     flag = next(row for row in listed if row["id"] == flag_id)
     assert float(flag["points"]) == 8
     assert "code" not in flag and "code_hash" not in flag
 
     duplicate_key = oc.post(
-        f"/v1/admin/challenges/{challenge_id}/ground-truth/flags",
+        f"/v1/admin/challenges/{sealed_challenge_id}/ground-truth/flags",
         json={"flag_key": "FLAG-TEST-UPDATED", "code": "FLAG{different_code}", "points": 2},
     )
     assert duplicate_key.status_code == 422
