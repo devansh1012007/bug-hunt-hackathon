@@ -556,7 +556,7 @@ export default function AdminManagement() {
                                 </div>
                               ) : (
                                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                  <Button size="sm" variant="secondary" disabled={participantBusy || !scoreElevated} onClick={() => { setResetTarget(participant.id); setResetPassword('') }}>Reset password</Button>
+                                  <Button size="sm" variant="ghost" disabled={participantBusy || !scoreElevated} onClick={() => { setResetTarget(participant.id); setResetPassword('') }}>Reset password</Button>
                                   <Button size="sm" variant="danger" disabled={participantBusy || !scoreElevated} onClick={() => void removeParticipant(participant)}>Remove</Button>
                                 </div>
                               )}
