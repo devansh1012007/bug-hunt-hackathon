@@ -20,7 +20,7 @@ import {
   Panel,
   StatusChip,
 } from '../../ui/components'
-import { adminErrorText } from '../../components/StepUp'
+import { adminErrorText, StepUpGateHint, StepUpPanel } from '../../components/StepUp'
 
 const TIME_REASONS = ['ACCOMMODATION', 'OUTAGE', 'DEVICE_FAILURE', 'OTHER'] as const
 
@@ -102,6 +102,8 @@ export default function AdminManagement() {
   const [timeForm, setTimeForm] = useState({ delta: '300', reason: 'OUTAGE', user_id: '' })
   const [scoreForm, setScoreForm] = useState({ team_id: '', points: '', reason: '', confirmed: false })
   const [scoreBusy, setScoreBusy] = useState(false)
+  const [stepUpUntil, setStepUpUntil] = useState<number | null>(null)
+  const scoreElevated = stepUpUntil !== null && stepUpUntil > Date.now()
 
   useEffect(() => {
     if (!configDirty && configQ.data) {
@@ -114,6 +116,8 @@ export default function AdminManagement() {
     setConfigReason('')
     setFreezeConfig(false)
     setInviteResult(null)
+    setInviteForm({ email: '', team_id: '' })
+    setScoreForm({ team_id: '', points: '', reason: '', confirmed: false })
     setTeamCreated(null)
     setNotice(null)
     setError(null)
@@ -494,7 +498,9 @@ export default function AdminManagement() {
           </Panel>
 
           {user?.role === 'admin' && (
-            <Panel exhibit="07" title="Manual score adjustment">
+            <>
+            <StepUpPanel stepUpUntil={stepUpUntil} onStepUp={setStepUpUntil} note="Manual score changes affect the append-only score ledger. Reconfirm your password before enabling this operation." />
+            <Panel exhibit="07" title="Manual score adjustment" actions={!scoreElevated ? <StepUpGateHint /> : undefined}>
               <form onSubmit={adjustScore} className="stack" style={{ gap: 12 }}>
                 <div className="grid-2">
                   <Field label="Stage" htmlFor="score-stage" required>
@@ -520,7 +526,7 @@ export default function AdminManagement() {
                   <input type="checkbox" checked={scoreForm.confirmed} onChange={(e) => setScoreForm({ ...scoreForm, confirmed: e.target.checked })} />
                   I understand this writes an append-only ledger entry and must be corrected by a reversal, not edited or deleted.
                 </label>
-                <Button type="submit" variant="danger" disabled={scoreBusy || !scoreForm.confirmed || !scoreForm.team_id || !stageId || !scoreForm.reason.trim() || !Number(scoreForm.points)}>
+                <Button type="submit" variant="danger" disabled={scoreBusy || !scoreElevated || !scoreForm.confirmed || !scoreForm.team_id || !stageId || !scoreForm.reason.trim() || !Number(scoreForm.points)}>
                   {scoreBusy ? 'Recording' : 'Append score adjustment'}
                 </Button>
                 <p className="muted small">This control is hidden from organizers and requires an admin role on the server.</p>
