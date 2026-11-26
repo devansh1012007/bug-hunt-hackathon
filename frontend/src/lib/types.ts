@@ -405,6 +405,15 @@ export interface AdminParticipant {
   created_at: string
 }
 
+export interface GroundTruthFlag {
+  id: string
+  flag_key: string
+  points: number
+  max_awards: number
+  position_label: string | null
+  created_at: string
+}
+
 export interface ConfigRevision {
   version: number
   config: Record<string, unknown>
