@@ -5,6 +5,7 @@ import Rules from './pages/Rules'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 import Login from './pages/Login'
+import { ActivateInvite, PasswordReset } from './pages/Access'
 import NotFound from './pages/NotFound'
 import Lobby from './pages/participant/Lobby'
 import Workspace from './pages/participant/Workspace'
@@ -17,6 +18,8 @@ import ReviewQueue from './pages/review/Queue'
 import ReviewItem from './pages/review/ItemDetail'
 import AdminDashboard from './pages/admin/Dashboard'
 import AdminChallenges from './pages/admin/Challenges'
+import AdminManagement from './pages/admin/Management'
+import AdminGroundTruth from './pages/admin/GroundTruth'
 
 export default function App() {
   return (
@@ -30,6 +33,8 @@ export default function App() {
       </Route>
 
       <Route path="/login" element={<Login />} />
+      <Route path="/activate" element={<ActivateInvite />} />
+      <Route path="/password-reset" element={<PasswordReset />} />
 
       {/* Participant console */}
       <Route
@@ -75,6 +80,8 @@ export default function App() {
               <Routes>
                 <Route index element={<AdminDashboard />} />
                 <Route path="challenges" element={<AdminChallenges />} />
+                <Route path="setup" element={<AdminManagement />} />
+                <Route path="ground-truth" element={<AdminGroundTruth />} />
               </Routes>
             </ConsoleShell>
           </RequireRole>
