@@ -505,10 +505,13 @@ def create_team(event_id: str, body: TeamIn, request: Request, p: Principal = De
 def list_teams(event_id: str, p: Principal = Depends(require_organizer)):
     """List teams for one event; used by invitation and scoring controls."""
     with app_session() as s:
-        if s.execute(
-            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
-            {"e": event_id},
-        ).first() is None:
+        if (
+            s.execute(
+                text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+                {"e": event_id},
+            ).first()
+            is None
+        ):
             raise ApiError("NOT_FOUND")
         rows = (
             s.execute(
@@ -542,9 +545,7 @@ def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal 
     with app_session() as s:
         from datetime import datetime, timedelta
 
-        if s.execute(
-            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": event_id}
-        ).first() is None:
+        if s.execute(text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": event_id}).first() is None:
             raise ApiError("NOT_FOUND")
         if body.role not in ("participant", "reviewer", "organizer", "admin"):
             raise ApiError("VALIDATION_ERROR", details={"role": "Unsupported invite role."})
@@ -557,7 +558,9 @@ def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal 
             if team is None or str(team[0]) != event_id:
                 raise ApiError("VALIDATION_ERROR", details={"team_id": "The team must belong to this event."})
             if body.role != "participant":
-                raise ApiError("VALIDATION_ERROR", details={"team_id": "Only participant invites can be assigned to a team."})
+                raise ApiError(
+                    "VALIDATION_ERROR", details={"team_id": "Only participant invites can be assigned to a team."}
+                )
 
         s.execute(
             text(
