@@ -597,23 +597,17 @@ def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal 
 
 @router.get("/admin/events/{event_id}/participants")
 def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
-    """List invitation-backed roster entries, including pending users."""
+    """List event team members and invitation-backed users without a team membership."""
     with app_session() as s:
         rows = (
             s.execute(
                 text(
                     "WITH member_rows AS ("
                     " SELECT u.id, u.email, u.name, u.role, u.status, t.id AS team_id, t.name AS team_name, "
-                    " (u.status = 'active') AS activated, "
-                    " COALESCE(latest_invite.created_at, u.created_at) AS created_at, NULL::timestamptz AS expires_at "
+                    " (u.status = 'active') AS activated, u.created_at, NULL::timestamptz AS expires_at "
                     " FROM app.team_members tm "
                     " JOIN app.teams t ON t.id = tm.team_id "
                     " JOIN app.users u ON u.id = tm.user_id "
-                    " LEFT JOIN LATERAL ("
-                    "  SELECT i.used_at, i.created_at, i.expires_at FROM app.invites i "
-                    "  WHERE i.event_id = t.event_id AND lower(i.email) = lower(u.email) "
-                    "  ORDER BY i.created_at DESC, i.id DESC LIMIT 1"
-                    " ) latest_invite ON TRUE "
                     " WHERE t.event_id = CAST(:e AS uuid)"
                     "), latest_invites AS ("
                     " SELECT DISTINCT ON (lower(i.email)) i.id, i.event_id, i.email, i.role, i.team_id, "
