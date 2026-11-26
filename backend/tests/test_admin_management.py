@@ -104,7 +104,7 @@ def test_organizer_setup_apis_cover_stages_teams_invites_and_revisions(client):
             "user_id": None,
         },
     )
-    assert wrong_event.status_code == 400, wrong_event.text
+    assert wrong_event.status_code == 422, wrong_event.text
     assert wrong_event.json()["error"]["code"] == "VALIDATION_ERROR"
 
     wrong_participant = organizer.post(
@@ -116,7 +116,7 @@ def test_organizer_setup_apis_cover_stages_teams_invites_and_revisions(client):
             "user_id": str(uuid.uuid4()),
         },
     )
-    assert wrong_participant.status_code == 400, wrong_participant.text
+    assert wrong_participant.status_code == 422, wrong_participant.text
     assert wrong_participant.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
