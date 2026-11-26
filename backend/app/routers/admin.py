@@ -18,8 +18,9 @@ import json
 from datetime import UTC
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from ..audit import audit_verify, audit_write
 from ..config import settings
@@ -463,7 +464,14 @@ def release_results(stage_id: str, body: dict, request: Request, p: Principal = 
     return {"ok": True}
 
 
-# --- teams, participants, invites ---------------------------------------------
+# --- teams and admin-managed participants -------------------------------------
+
+
+def admin_step_up_verified(p: Principal = Depends(step_up_verified)) -> Principal:
+    """Admin-only wrapper around the normal five-minute password step-up."""
+    if p.role != "admin":
+        raise ApiError("AUTH_FORBIDDEN")
+    return p
 
 
 class TeamIn(BaseModel):
@@ -534,65 +542,347 @@ def list_teams(event_id: str, p: Principal = Depends(require_organizer)):
     return {"teams": [dict(row) for row in rows]}
 
 
-class InviteIn(BaseModel):
-    email: str
-    team_id: str | None = None
-    role: str = "participant"
+class ParticipantCreateIn(BaseModel):
+    email: EmailStr
+    name: str = Field(min_length=2, max_length=160)
+    team_id: str
 
 
-@router.post("/admin/events/{event_id}/invites", status_code=201)
-def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal = Depends(require_organizer)):
-    """Creates a single-use activation token. v1 returns it to the organizer
-    console (email delivery is a deployment follow-up, see runbook)."""
-    import secrets
+class ParticipantTeamIn(BaseModel):
+    team_id: str
 
-    raw = secrets.token_urlsafe(32)
-    with app_session() as s:
-        from datetime import datetime, timedelta
 
-        if s.execute(text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": event_id}).first() is None:
-            raise ApiError("NOT_FOUND")
-        if body.role not in ("participant", "reviewer", "organizer", "admin"):
-            raise ApiError("VALIDATION_ERROR", details={"role": "Unsupported invite role."})
-        if body.role != "participant" and p.role != "admin":
-            raise ApiError("AUTH_FORBIDDEN", message="Only an admin can invite privileged accounts.")
-        if body.team_id:
+class AdminPasswordResetIn(BaseModel):
+    password: str = Field(min_length=12, max_length=200)
+
+
+@router.post("/admin/events/{event_id}/participants", status_code=201)
+def register_event_participant(
+    event_id: str,
+    body: ParticipantCreateIn,
+    request: Request,
+    p: Principal = Depends(admin_step_up_verified),
+):
+    """Register a participant without a password; first sign-in claims the initial password."""
+    user_id = None
+    password_setup_required = True
+    try:
+        with app_session() as s:
+            event = (
+                s.execute(
+                    text(
+                        "SELECT tenant_id, max_participants FROM app.events "
+                        "WHERE id = CAST(:e AS uuid) FOR UPDATE"
+                    ),
+                    {"e": event_id},
+                )
+                .mappings()
+                .first()
+            )
+            if event is None:
+                raise ApiError("NOT_FOUND")
+
             team = s.execute(
-                text("SELECT event_id FROM app.teams WHERE id = CAST(:t AS uuid)"), {"t": body.team_id}
+                text("SELECT event_id FROM app.teams WHERE id = CAST(:t AS uuid) FOR UPDATE"),
+                {"t": body.team_id},
             ).first()
             if team is None or str(team[0]) != event_id:
-                raise ApiError("VALIDATION_ERROR", details={"team_id": "The team must belong to this event."})
-            if body.role != "participant":
+                raise ApiError("VALIDATION_ERROR", details={"team_id": "Choose a team from this event."})
+
+            member_count = s.execute(
+                text(
+                    "SELECT count(DISTINCT tm.user_id) FROM app.team_members tm "
+                    "JOIN app.teams t ON t.id = tm.team_id WHERE t.event_id = CAST(:e AS uuid)"
+                ),
+                {"e": event_id},
+            ).scalar_one()
+            if int(member_count) >= int(event["max_participants"]):
                 raise ApiError(
-                    "VALIDATION_ERROR", details={"team_id": "Only participant invites can be assigned to a team."}
+                    "VALIDATION_ERROR",
+                    details={"capacity": f"Participant cap ({event['max_participants']}) reached."},
                 )
 
+            existing = (
+                s.execute(
+                    text(
+                        "SELECT id, tenant_id, role, status, password_hash FROM app.users "
+                        "WHERE lower(email) = :email FOR UPDATE"
+                    ),
+                    {"email": body.email.lower()},
+                )
+                .mappings()
+                .first()
+            )
+            if existing is None:
+                user_id = str(uuid7())
+                s.execute(
+                    text(
+                        "INSERT INTO app.users "
+                        "(id, tenant_id, email, name, role, password_hash, status, registration_id) "
+                        "VALUES (CAST(:id AS uuid), CAST(:tenant AS uuid), :email, :name, "
+                        "'participant', NULL, 'active', :registration_id)"
+                    ),
+                    {
+                        "id": user_id,
+                        "tenant": str(event["tenant_id"]),
+                        "email": body.email.lower(),
+                        "name": body.name,
+                        "registration_id": str(uuid7())[:8],
+                    },
+                )
+            else:
+                user_id = str(existing["id"])
+                if str(existing["tenant_id"]) != str(event["tenant_id"]) or existing["role"] != "participant":
+                    raise ApiError(
+                        "VALIDATION_ERROR",
+                        details={"email": "This email is already registered for a different account role or tenant."},
+                    )
+                if existing["status"] == "disqualified":
+                    raise ApiError("AUTH_FORBIDDEN", message="This account is disqualified.")
+                membership = s.execute(
+                    text(
+                        "SELECT t.event_id FROM app.team_members tm "
+                        "JOIN app.teams t ON t.id = tm.team_id WHERE tm.user_id = CAST(:u AS uuid)"
+                    ),
+                    {"u": user_id},
+                ).first()
+                if membership is not None:
+                    raise ApiError(
+                        "VALIDATION_ERROR",
+                        details={"email": "This account is already assigned to a team. Reassign it instead."},
+                    )
+                if existing["status"] != "active":
+                    s.execute(
+                        text(
+                            "UPDATE app.users SET status = 'active', token_version = token_version + 1 "
+                            "WHERE id = CAST(:u AS uuid)"
+                        ),
+                        {"u": user_id},
+                    )
+                password_setup_required = existing["password_hash"] is None
+
+            s.execute(
+                text(
+                    "INSERT INTO app.team_members (id, team_id, user_id) "
+                    "VALUES (CAST(:id AS uuid), CAST(:team AS uuid), CAST(:user AS uuid))"
+                ),
+                {"id": str(uuid7()), "team": body.team_id, "user": user_id},
+            )
+            audit_write(
+                s,
+                actor_id=p.id,
+                actor_role=p.role,
+                action="participant.registered",
+                entity_type="user",
+                entity_id=user_id,
+                request_id=request.state.request_id,
+                event_scope=f"event:{event_id}",
+                details={
+                    "email": body.email.lower(),
+                    "team_id": body.team_id,
+                    "password_setup_required": password_setup_required,
+                },
+            )
+    except IntegrityError:
+        raise ApiError(
+            "VALIDATION_ERROR",
+            details={"email": "This email or team membership already exists. Refresh the roster and retry."},
+        ) from None
+
+    return {
+        "participant_id": user_id,
+        "email": body.email.lower(),
+        "team_id": body.team_id,
+        "password_setup_required": password_setup_required,
+    }
+
+
+@router.patch("/admin/events/{event_id}/participants/{user_id}/team")
+def reassign_event_participant(
+    event_id: str,
+    user_id: str,
+    body: ParticipantTeamIn,
+    request: Request,
+    p: Principal = Depends(admin_step_up_verified),
+):
+    with app_session() as s:
+        if s.execute(
+            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+            {"e": event_id},
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+        target = s.execute(
+            text("SELECT event_id FROM app.teams WHERE id = CAST(:t AS uuid) FOR UPDATE"),
+            {"t": body.team_id},
+        ).first()
+        if target is None or str(target[0]) != event_id:
+            raise ApiError("VALIDATION_ERROR", details={"team_id": "Choose a team from this event."})
+        current = s.execute(
+            text(
+                "SELECT tm.team_id FROM app.team_members tm "
+                "JOIN app.teams t ON t.id = tm.team_id "
+                "WHERE tm.user_id = CAST(:u AS uuid) AND t.event_id = CAST(:e AS uuid) FOR UPDATE"
+            ),
+            {"u": user_id, "e": event_id},
+        ).first()
+        if current is None:
+            raise ApiError("NOT_FOUND")
+        if str(current[0]) != body.team_id:
+            s.execute(
+                text("DELETE FROM app.team_members WHERE user_id = CAST(:u AS uuid) AND team_id = CAST(:t AS uuid)"),
+                {"u": user_id, "t": str(current[0])},
+            )
+            s.execute(
+                text(
+                    "INSERT INTO app.team_members (id, team_id, user_id) "
+                    "VALUES (CAST(:id AS uuid), CAST(:team AS uuid), CAST(:user AS uuid))"
+                ),
+                {"id": str(uuid7()), "team": body.team_id, "user": user_id},
+            )
+        audit_write(
+            s,
+            actor_id=p.id,
+            actor_role=p.role,
+            action="participant.team_reassigned",
+            entity_type="user",
+            entity_id=user_id,
+            request_id=request.state.request_id,
+            event_scope=f"event:{event_id}",
+            details={"from_team_id": str(current[0]), "to_team_id": body.team_id},
+        )
+    return {"ok": True, "team_id": body.team_id}
+
+
+@router.delete("/admin/events/{event_id}/participants/{user_id}")
+def remove_event_participant(
+    event_id: str,
+    user_id: str,
+    request: Request,
+    p: Principal = Depends(admin_step_up_verified),
+):
+    with app_session() as s:
+        row = s.execute(
+            text(
+                "SELECT tm.team_id FROM app.team_members tm "
+                "JOIN app.teams t ON t.id = tm.team_id "
+                "WHERE tm.user_id = CAST(:u AS uuid) AND t.event_id = CAST(:e AS uuid) FOR UPDATE"
+            ),
+            {"u": user_id, "e": event_id},
+        ).first()
+        if row is None:
+            raise ApiError("NOT_FOUND")
+        s.execute(
+            text("DELETE FROM app.team_members WHERE user_id = CAST(:u AS uuid) AND team_id = CAST(:t AS uuid)"),
+            {"u": user_id, "t": str(row[0])},
+        )
+        remaining_memberships = s.execute(
+            text("SELECT count(*) FROM app.team_members WHERE user_id = CAST(:u AS uuid)"),
+            {"u": user_id},
+        ).scalar_one()
+        if int(remaining_memberships) == 0:
+            s.execute(
+                text(
+                    "UPDATE app.users SET status = 'disabled', token_version = token_version + 1 "
+                    "WHERE id = CAST(:u AS uuid)"
+                ),
+                {"u": user_id},
+            )
+            s.execute(
+                text("UPDATE app.sessions SET revoked_at = now() WHERE user_id = CAST(:u AS uuid) AND revoked_at IS NULL"),
+                {"u": user_id},
+            )
+            s.execute(
+                text("UPDATE app.refresh_tokens SET status = 'revoked' WHERE user_id = CAST(:u AS uuid)"),
+                {"u": user_id},
+            )
+        audit_write(
+            s,
+            actor_id=p.id,
+            actor_role=p.role,
+            action="participant.removed_from_event",
+            entity_type="user",
+            entity_id=user_id,
+            request_id=request.state.request_id,
+            event_scope=f"event:{event_id}",
+            details={"remaining_team_memberships": int(remaining_memberships)},
+        )
+    return {"ok": True}
+
+
+@router.post("/admin/users/{user_id}/password-reset")
+def admin_reset_user_password(
+    user_id: str,
+    body: AdminPasswordResetIn,
+    request: Request,
+    p: Principal = Depends(admin_step_up_verified),
+):
+    if user_id == p.id:
+        raise ApiError("VALIDATION_ERROR", details={"user_id": "Use another admin account to reset your own password."})
+    with app_session() as s:
+        user = (
+            s.execute(
+                text("SELECT email FROM app.users WHERE id = CAST(:u AS uuid) FOR UPDATE"),
+                {"u": user_id},
+            )
+            .mappings()
+            .first()
+        )
+        if user is None:
+            raise ApiError("NOT_FOUND")
         s.execute(
             text(
-                "INSERT INTO app.invites (id, event_id, email, token_hash, team_id, role, expires_at) "
-                "VALUES (CAST(:id AS uuid), CAST(:e AS uuid), :email, :th, CAST(:t AS uuid), :role, :exp)"
+                "UPDATE app.users SET password_hash = :pw, status = 'active', "
+                "token_version = token_version + 1 WHERE id = CAST(:u AS uuid)"
             ),
-            {
-                "id": str(uuid7()),
-                "e": event_id,
-                "email": body.email.lower(),
-                "th": __import__("hashlib").sha256(raw.encode()).hexdigest(),
-                "t": body.team_id,
-                "role": body.role,
-                "exp": datetime.now(UTC) + timedelta(hours=48),
-            },
+            {"pw": __import__("app.security", fromlist=["hash_password"]).hash_password(body.password), "u": user_id},
+        )
+        s.execute(
+            text("UPDATE app.sessions SET revoked_at = now() WHERE user_id = CAST(:u AS uuid) AND revoked_at IS NULL"),
+            {"u": user_id},
+        )
+        s.execute(
+            text("UPDATE app.refresh_tokens SET status = 'revoked' WHERE user_id = CAST(:u AS uuid)"),
+            {"u": user_id},
         )
         audit_write(
             s,
             actor_id=p.id,
             actor_role=p.role,
-            action="invite.created",
-            entity_type="event",
-            entity_id=event_id,
+            action="auth.password_reset_by_admin",
+            entity_type="user",
+            entity_id=user_id,
             request_id=request.state.request_id,
-            details={"email": body.email},
+            details={"target_email": user["email"]},
         )
-    return {"invite_token": raw, "activation_url": f"/activate?invite={raw}"}
+    return {"ok": True, "email": user["email"]}
+
+
+@router.get("/admin/events/{event_id}/participants")
+def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
+    """List registered event participants; no invitation tokens are issued or exposed."""
+    with app_session() as s:
+        if s.execute(
+            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+            {"e": event_id},
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+        rows = (
+            s.execute(
+                text(
+                    "SELECT u.id, u.email, u.name, u.role, u.status, t.id AS team_id, t.name AS team_name, "
+                    "(u.password_hash IS NOT NULL) AS password_set, u.created_at "
+                    "FROM app.team_members tm "
+                    "JOIN app.teams t ON t.id = tm.team_id "
+                    "JOIN app.users u ON u.id = tm.user_id "
+                    "WHERE t.event_id = CAST(:e AS uuid) "
+                    "ORDER BY u.email LIMIT 500"
+                ),
+                {"e": event_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {"participants": [dict(r) for r in rows]}
 
 
 @router.get("/admin/events/{event_id}/participants")
