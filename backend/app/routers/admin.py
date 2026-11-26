@@ -517,7 +517,7 @@ def create_team(event_id: str, body: TeamIn, request: Request, p: Principal = De
 
 @router.get("/admin/events/{event_id}/teams")
 def list_teams(event_id: str, p: Principal = Depends(require_organizer)):
-    """List teams for one event; used by invitation and scoring controls."""
+    """List teams for one event; used by participant registration and scoring controls."""
     with app_session() as s:
         if (
             s.execute(
@@ -1306,6 +1306,8 @@ def update_ground_truth_flag(
     changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise ApiError("VALIDATION_ERROR", details={"body": "Provide at least one field to update."})
+    if any(value is None for value in changes.values()):
+        raise ApiError("VALIDATION_ERROR", details={"body": "Fields may be omitted, but cannot be set to null."})
 
     with app_session() as s:
         challenge = s.execute(
