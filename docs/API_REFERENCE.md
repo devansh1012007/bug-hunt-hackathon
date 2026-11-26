@@ -1,4 +1,4 @@
-Status: describes the implementation as of 2026-11-22
+Status: describes the implementation as of 2026-11-26
 
 # API Reference
 
@@ -11,6 +11,8 @@ Base URL: same origin as the SPA, paths under `/v1` (plus the unversioned `GET /
 Codes and HTTP statuses come from the catalog in `backend/app/errors.py`. Known quirk: the catalog messages for `AUTH_RATE_LIMITED` and `SUBMISSION_COOLDOWN` contain a `{n}` placeholder that is NOT interpolated by `api_error_handler`; the real remaining-seconds values are in `details.n` (details keys: `n` for those codes, plus code-specific keys noted below). Likewise `INTERNAL_ERROR` interpolates the request id into the message server-side.
 
 Authentication: `Authorization: Bearer <access token>` on everything except the endpoints marked "no auth" below. Roles: `participant`, `reviewer`, `organizer`, `admin`. `require_staff` accepts reviewer/organizer/admin; `require_organizer` accepts organizer/admin. Step-up: sensitive admin routes raise 403 `ADMIN_STEP_UP_REQUIRED` unless `POST /v1/auth/step-up` succeeded within the last 5 minutes for the caller's session (AUTH-09).
+
+**Event account policy:** Participant accounts can be created only by an administrator through the event participant endpoint above. Staff accounts are created by `POST /v1/auth/register`. There are no invite tokens, activation routes, or self-service password-reset routes for this event. A registered account with no password claims its initial password on first sign-in; the first claimant only needs to know the registered email. Mailbox ownership is deliberately not verified, which is a documented event risk. All later sign-ins verify the password normally. Participant creation, team reassignment/removal, and password resets are admin-only and require step-up.
 
 Idempotency: `POST /v1/submissions` requires an `Idempotency-Key` header (8..80 chars). Replay semantics are described in section 4.
 
@@ -27,13 +29,13 @@ Idempotency: `POST /v1/submissions` requires an `Idempotency-Key` header (8..80 
 
 | Method, path | Role | Limits / notes | Body | Response, errors |
 | --- | --- | --- | --- | --- |
-| POST `/v1/auth/login` | anon | 20/min per IP + 10/min per email (in-process bucket) | `{email, password}` | `{access_token, expires_at, server_time, user{id,email,name,role,status}}`; sets `bhctf_refresh` cookie (HttpOnly, SameSite=Strict, path `/v1/auth/refresh`, Secure in production). Errors: 401 `AUTH_INVALID_CREDENTIALS` (generic, no enumeration, ATH-01), 403 `AUTH_NOT_ACTIVATED`, `AUTH_FORBIDDEN` (disqualified), 429 `AUTH_RATE_LIMITED`. AUTH-10 (max 2 live sessions) is enforced at login by reclaiming zombie sessions and evicting the oldest live session (audited `auth.session_evicted`); login is never rejected because of the cap |
+| POST `/v1/auth/login` | anon | 20/min per IP + 10/min per email (in-process bucket); password min 12 chars | `{email, password}` | Only an email already registered by an admin can sign in; unknown email returns generic 401 `AUTH_INVALID_CREDENTIALS`. If the registered account has no `password_hash`, the password supplied on this first sign-in is saved as its initial password and the account becomes active. Otherwise the stored password is verified. This event intentionally does not verify mailbox ownership before allowing the first password claim; this risk is accepted for the event. Success returns `{access_token, expires_at, server_time, user{id,email,name,role,status}}` and sets the HttpOnly refresh cookie. AUTH-10 (max 2 live sessions) reclaims zombie sessions and evicts the oldest live session (audited `auth.session_evicted`). |
 | POST `/v1/auth/refresh` | cookie | CSRF: `Origin` must equal an allow-listed origin AND header `X-BHCTF-Client` must be present (NET-05) | none | `{access_token, expires_at, server_time}`; rotates the refresh family. Reuse of a rotated token within 10 s grace returns the same successor (AUTH-04); reuse outside grace revokes the whole family and session. Errors: 403 `AUTH_FORBIDDEN` (bad Origin/header), 401 `AUTH_SESSION_REVOKED` |
 | POST `/v1/auth/logout` | any | bearer required | none | `{ok:true}`; revokes all refresh tokens and the session, clears cookie |
-| POST `/v1/auth/activate` | anon | invite token single-use, 48 h expiry | `{invite_token, password (min 12), accept_rules}` | `{ok, email}`; sets password, creates `team_members` link and the rules acceptance, writes audit. Errors: 403 `RULES_NOT_ACCEPTED`, 422 `VALIDATION_ERROR`, 404 `NOT_FOUND` (invalid/expired/used) |
+| POST `/v1/auth/register` | admin only | Admin-created staff accounts; no password is set here | `{email, name, role: reviewer|organizer|admin}` | 201 `{ok, email, message, password_setup_required:true}`. The staff member sets their initial password on first sign-in. Participant registration is event/team-scoped at `POST /v1/admin/events/{id}/participants`.
 | POST `/v1/auth/step-up` | any | 5 failures/300 s per user | `{password}` | `{ok, valid_until}`; records `sessions.step_up_at = now()`. Error: 401 `AUTH_INVALID_CREDENTIALS` |
-| POST `/v1/auth/password/reset-request` | anon | 3/600 s per IP | `{email}` | `{ok, message}` always (no enumeration). v1: the reset token is printed to the server log and surfaced via organizer tooling, no email is sent |
-| POST `/v1/auth/password/reset` | anon | token single-use, 30 min | `{token, password}` | `{ok}`; bumps `users.token_version` (invalidates all access tokens, ATH-03), revokes sessions and refresh families. Error: 404 `NOT_FOUND` |
+| POST `/v1/auth/activate` | disabled | Not registered in the API for this event. No invite tokens or activation flow are used; admins register users and first sign-in sets an initial password when needed. | none | 404 `NOT_FOUND`.
+| POST `/v1/auth/password/reset-request`, `POST /v1/auth/password/reset` | disabled | No self-service password reset routes are registered for this event. | none | 404 `NOT_FOUND`. Password reset is an admin-only action described in section 8.
 | GET `/v1/me` | any | none | none | `{id, email, name, role, status, team{id,name,join_code,event_id,slug,event_status}|null, rules_accepted, rules_version}` |
 | GET `/v1/me/sessions` | any | none | none | `[{id, created_at, last_seen_at, device(user_agent, 80 chars)}]` for unrevoked sessions |
 | DELETE `/v1/me/sessions/{session_id}` | any | own sessions only | none | `{ok:true}`; revokes that session and its refresh tokens |
@@ -127,14 +129,20 @@ Auth as listed; `step_up` column means the route additionally requires a fresh s
 | POST `/v1/admin/stages/{id}/control` | organizer | `{action: seal|arm|start|pause|resume|extend|end, reason, seconds?}`. Reason required (422). `extend` 1..3600 s. See state machine notes in SYSTEM_ARCHITECTURE.md Section 5.2 for the resume caveat |
 | POST `/v1/admin/stages/{id}/release` | organizer | `{action: evaluate|release, reason}`; evaluate: ended->evaluating + `release_feedback` job; release: ->released + `release_feedback` + `refresh_leaderboard(public)` |
 | POST `/v1/admin/events/{id}/teams` | organizer | `{name}` -> 201 `{team_id, join_code}`; enforces `max_teams` |
-| POST `/v1/admin/events/{id}/invites` | organizer | `{email, team_id?, role="participant"}` -> 201 `{invite_token, activation_url}` (raw token shown once; 48 h expiry; no email in v1) |
-| GET `/v1/admin/events/{id}/participants` | organizer | Invite-joined view with activation state and team name, limit 500 |
+| GET `/v1/admin/events/{id}/teams` | organizer | Event-scoped team list with member counts; join codes are not returned |
+| POST `/v1/admin/events/{id}/participants` | admin + step_up | `{email, name, team_id}` -> 201 `{participant_id, email, team_id, password_setup_required}`. Creates/reuses a passwordless participant account and assigns it directly to a team. No invite or activation token is created. |
+| GET `/v1/admin/events/{id}/participants` | organizer | Registered participant roster, including `password_set`; no invite tokens or password hashes returned |
+| PATCH `/v1/admin/events/{id}/participants/{user_id}/team` | admin + step_up | `{team_id}`; moves the participant to another team within the same event |
+| DELETE `/v1/admin/events/{id}/participants/{user_id}` | admin + step_up | Removes the participant's event membership. If no other team membership remains, disables the account and revokes its sessions |
+| POST `/v1/admin/users/{user_id}/password-reset` | admin + step_up | `{password (min 12)}`; sets a new password, increments `token_version`, revokes all active sessions and refresh tokens. An administrator cannot reset their own password through this route |
 | POST `/v1/admin/events/{id}/challenges` | organizer + step_up | `{slug, title, instructions_markdown?}` -> 201 `{challenge_id}` |
 | POST `/v1/admin/challenges/{id}/files` | organizer + step_up | multipart `file` (path = filename); 512 KiB max; traversal rejected (`PATH_INVALID`); upserts file content + rebuilds the line index (first 5000 lines, 500 chars each); refused once status is sealed/published (409 `GROUND_TRUTH_LOCKED`) |
 | POST `/v1/admin/challenges/{id}/freeze` | organizer + step_up | Requires >= 1 file; computes `content_hash` over ordered file hashes; sets status sealed (409 `GROUND_TRUTH_LOCKED` otherwise) |
 | POST `/v1/admin/challenges/{id}/publish` | organizer | `{stage_id}`; sealed only; sets published and creates the `assignments` row |
 | POST `/v1/admin/challenges/{id}/ground-truth/bugs` | organizer + step_up | `{code<=40, title, severity, category, points>0<=1000, root_cause_group, explanation, fix_guidance?, locations<=8, aliases<=12}` -> 201 `{bug_id}`. Writes via `gt_session` only; refused after seal (DAT-03/04) |
-| POST `/v1/admin/challenges/{id}/ground-truth/flags` | organizer + step_up | `{flag_key<=40, code 4..200, points>0<=500, max_awards>=1}`; stores only the HMAC `code_hash`, plaintext never persisted |
+| GET `/v1/admin/challenges/{id}/ground-truth/flags` | organizer + step_up | Lists `{id, flag_key, points, max_awards, position_label, created_at}`. Never returns plaintext flag codes or stored hashes |
+| POST `/v1/admin/challenges/{id}/ground-truth/flags` | organizer + step_up | `{flag_key, code 4..200, points>0<=500, max_awards>=1}` -> 201 `{flag_id, ok}`; stores only the HMAC `code_hash`, plaintext never persisted; flag key and code must be unique within the challenge |
+| PATCH `/v1/admin/challenges/{id}/ground-truth/flags/{flag_id}` | organizer + step_up | Partial body `{flag_key?, code?, points?, max_awards?}`; edits a flag on a draft/reviewed challenge only. Omit `code` to retain the existing secret; list/read responses never expose the code or hash |
 | POST `/v1/admin/challenges/{id}/ground-truth/test-results` | organizer + step_up | `{submission_id, tests_passed, tests_total}`; enqueues `apply_test_results` (ADR-019); audit scope `scoring` |
 | POST `/v1/admin/events/{id}/announcements` | organizer | `{severity: info|warning|critical, body 3..1000}` |
 | POST `/v1/admin/events/{id}/time-adjustment` | organizer | `{stage_id, delta_seconds (nonzero), reason_code: ACCOMMODATION|OUTAGE|DEVICE_FAILURE|OTHER, user_id?}`; per-user when `user_id` set, global otherwise (TIM-05) |
