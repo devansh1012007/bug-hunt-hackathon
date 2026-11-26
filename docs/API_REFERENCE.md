@@ -130,7 +130,7 @@ Auth as listed; `step_up` column means the route additionally requires a fresh s
 | POST `/v1/admin/stages/{id}/release` | organizer | `{action: evaluate|release, reason}`; evaluate: ended->evaluating + `release_feedback` job; release: ->released + `release_feedback` + `refresh_leaderboard(public)` |
 | POST `/v1/admin/events/{id}/teams` | organizer | `{name}` -> 201 `{team_id, join_code}`; enforces `max_teams` |
 | GET `/v1/admin/events/{id}/teams` | organizer | Event-scoped team list with member counts; join codes are not returned |
-| POST `/v1/admin/events/{id}/participants` | admin + step_up | `{email, name, team_id}` -> 201 `{participant_id, email, team_id, password_setup_required}`. Creates/reuses a passwordless participant account and assigns it directly to a team. No invite or activation token is created. |
+| POST `/v1/admin/events/{id}/participants` | admin + step_up | `{email, name, team_id}` -> 201 `{participant_id, email, team_id, password_setup_required}`. Creates a passwordless participant account or assigns an existing passworded participant account to the selected team. No invite or activation token is created. |
 | GET `/v1/admin/events/{id}/participants` | organizer | Registered participant roster, including `password_set`; no invite tokens or password hashes returned |
 | PATCH `/v1/admin/events/{id}/participants/{user_id}/team` | admin + step_up | `{team_id}`; moves the participant to another team within the same event |
 | DELETE `/v1/admin/events/{id}/participants/{user_id}` | admin + step_up | Removes the participant's event membership. If no other team membership remains, disables the account and revokes its sessions |
