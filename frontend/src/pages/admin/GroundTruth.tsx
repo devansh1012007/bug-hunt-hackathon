@@ -48,6 +48,7 @@ export default function AdminGroundTruth() {
   }, [eventsQ.data, eventId])
 
   useEffect(() => {
+    if (!eventId || challengesQ.isLoading) return
     const rows = challengesQ.data?.challenges ?? []
     if (challengeId && rows.some((row) => row.id === challengeId)) return
     if (rows.length) setChallengeId(rows[0].id)
