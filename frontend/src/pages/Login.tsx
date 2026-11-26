@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth, homePathFor } from '../lib/auth'
 import { ApiRequestError } from '../lib/api'
 import { Button, ErrorBanner, Field, Panel } from '../ui/components'
@@ -84,6 +84,11 @@ export default function Login() {
             </Button>
           </form>
         </Panel>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }} className="small">
+          <Link to="/password-reset">Forgot password?</Link>
+          <Link to="/activate">Activate an invitation</Link>
+        </div>
 
         <p className="muted small">
           No account yet? Just sign in with your email id - your account is created on first sign-in. The server
