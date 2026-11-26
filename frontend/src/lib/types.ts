@@ -394,16 +394,15 @@ export interface AdminTeam {
 }
 
 export interface AdminParticipant {
-  id: string | null
+  id: string
   email: string
-  name: string | null
+  name: string
   role: Role
   status: string
-  team_id: string | null
-  team_name: string | null
-  activated: boolean
+  team_id: string
+  team_name: string
+  password_set: boolean
   created_at: string
-  expires_at: string
 }
 
 export interface ConfigRevision {
