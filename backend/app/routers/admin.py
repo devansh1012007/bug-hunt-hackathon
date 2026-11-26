@@ -653,10 +653,13 @@ def create_challenge(event_id: str, body: ChallengeIn, request: Request, p: Prin
 def list_challenge_versions(event_id: str, p: Principal = Depends(require_organizer)):
     """List safe challenge metadata; ground-truth secrets are never returned."""
     with app_session() as s:
-        if s.execute(
-            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
-            {"e": event_id},
-        ).first() is None:
+        if (
+            s.execute(
+                text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+                {"e": event_id},
+            ).first()
+            is None
+        ):
             raise ApiError("NOT_FOUND")
         rows = (
             s.execute(
