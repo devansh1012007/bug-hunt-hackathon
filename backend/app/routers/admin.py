@@ -166,7 +166,8 @@ def revise_config(event_id: str, body: ConfigIn, request: Request, p: Principal 
         s.execute(
             text(
                 "INSERT INTO app.event_config_revisions (id, event_id, version, config, rule_set_hash, reason, created_by, frozen_at) "
-                "VALUES (CAST(:id AS uuid), CAST(:e AS uuid), :v, CAST(:cfg AS jsonb), :h, :reason, CAST(:u AS uuid), :frozen)"
+                "VALUES (CAST(:id AS uuid), CAST(:e AS uuid), :v, CAST(:cfg AS jsonb), :h, :reason, CAST(:u AS uuid), "
+                "CASE WHEN :freeze THEN now() ELSE NULL END)"
             ),
             {
                 "id": str(uuid7()),
@@ -176,7 +177,7 @@ def revise_config(event_id: str, body: ConfigIn, request: Request, p: Principal 
                 "h": rule_set_hash,
                 "reason": body.reason,
                 "u": p.id,
-                "frozen": "now()" if body.freeze else None,
+                "freeze": body.freeze,
             },
         )
         if body.freeze:
@@ -512,10 +513,10 @@ def list_teams(event_id: str, p: Principal = Depends(require_organizer)):
         rows = (
             s.execute(
                 text(
-                    "SELECT t.id, t.name, t.join_code, t.status, count(DISTINCT tm.user_id) AS member_count "
+                    "SELECT t.id, t.name, t.status, count(DISTINCT tm.user_id) AS member_count "
                     "FROM app.teams t LEFT JOIN app.team_members tm ON tm.team_id = t.id "
                     "WHERE t.event_id = CAST(:e AS uuid) "
-                    "GROUP BY t.id, t.name, t.join_code, t.status ORDER BY t.name"
+                    "GROUP BY t.id, t.name, t.status ORDER BY t.name"
                 ),
                 {"e": event_id},
             )
