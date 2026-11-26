@@ -70,6 +70,48 @@ def test_first_sign_in_claims_password_only_for_admin_registered_accounts(client
     assert unknown.status_code == 401
     assert unknown.json()["error"]["code"] == "AUTH_INVALID_CREDENTIALS"
 
+    # A pre-existing pending account with a password activates only after a
+    # successful password check. An incorrect password must leave it pending.
+    import uuid
+
+    from app import security
+    from app.db import app_engine
+    from sqlalchemy import text
+
+    pending_email = f"pending-{uuid.uuid4().hex[:10]}@example.com"
+    pending_password = "Pending-Account-Password-123"
+    with app_engine.begin() as conn:
+        tenant_id = conn.execute(
+            text("SELECT tenant_id FROM app.events ORDER BY created_at DESC LIMIT 1")
+        ).scalar_one()
+        conn.execute(
+            text(
+                "INSERT INTO app.users (id, tenant_id, email, name, role, password_hash, status) "
+                "VALUES (gen_random_uuid(), :tenant, :email, 'Pending Account', 'participant', :pw, 'pending')"
+            ),
+            {"tenant": tenant_id, "email": pending_email, "pw": security.hash_password(pending_password)},
+        )
+
+    bad_pending_login = client.post(
+        "/v1/auth/login", json={"email": pending_email, "password": "Wrong-Pending-Password-123"}
+    )
+    assert bad_pending_login.status_code == 401
+    with app_engine.connect() as conn:
+        status_after_bad_password = conn.execute(
+            text("SELECT status FROM app.users WHERE lower(email) = :e"), {"e": pending_email}
+        ).scalar_one()
+    assert status_after_bad_password == "pending"
+
+    good_pending_login = client.post(
+        "/v1/auth/login", json={"email": pending_email, "password": pending_password}
+    )
+    assert good_pending_login.status_code == 200, good_pending_login.text
+    with app_engine.connect() as conn:
+        status_after_good_password = conn.execute(
+            text("SELECT status FROM app.users WHERE lower(email) = :e"), {"e": pending_email}
+        ).scalar_one()
+    assert status_after_good_password == "active"
+
     # Public activation and self-service password recovery are disabled for this event.
     assert client.post(
         "/v1/auth/activate",
