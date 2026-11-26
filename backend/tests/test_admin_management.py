@@ -95,6 +95,30 @@ def test_organizer_setup_apis_cover_stages_teams_invites_and_revisions(client):
     )
     assert time_response.status_code == 200, time_response.text
 
+    wrong_event = organizer.post(
+        f"/v1/admin/events/{uuid.uuid4()}/time-adjustment",
+        json={
+            "stage_id": stage_id,
+            "delta_seconds": 120,
+            "reason_code": "OUTAGE",
+            "user_id": None,
+        },
+    )
+    assert wrong_event.status_code == 400, wrong_event.text
+    assert wrong_event.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    wrong_participant = organizer.post(
+        f"/v1/admin/events/{event_id}/time-adjustment",
+        json={
+            "stage_id": stage_id,
+            "delta_seconds": 120,
+            "reason_code": "OUTAGE",
+            "user_id": str(uuid.uuid4()),
+        },
+    )
+    assert wrong_participant.status_code == 400, wrong_participant.text
+    assert wrong_participant.json()["error"]["code"] == "VALIDATION_ERROR"
+
 
 def test_new_admin_read_apis_reject_participants(client):
     from conftest import participant_client
