@@ -389,7 +389,6 @@ export const RUBRIC_KEYS = ['functionality', 'root_cause', 'code_quality', 'test
 export interface AdminTeam {
   id: string
   name: string
-  join_code: string
   status: string
   member_count: number
 }
