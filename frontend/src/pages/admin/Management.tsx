@@ -493,7 +493,6 @@ export default function AdminManagement() {
                 <p className="muted small">Only an administrator can register, reassign, remove, or reset passwords for participants.</p>
               )}
             </Panel>
-            </Panel>
           </div>
 
           <Panel exhibit="04" title="Participant roster">
