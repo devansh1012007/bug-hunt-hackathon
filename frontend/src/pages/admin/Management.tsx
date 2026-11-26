@@ -24,8 +24,6 @@ import { adminErrorText, StepUpGateHint, StepUpPanel } from '../../components/St
 
 const TIME_REASONS = ['ACCOMMODATION', 'OUTAGE', 'DEVICE_FAILURE', 'OTHER'] as const
 
-type InviteResult = { invite_token: string; activation_url: string }
-
 export default function AdminManagement() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -85,8 +83,11 @@ export default function AdminManagement() {
   const [stageForm, setStageForm] = useState({ name: '', kind: 'main', grace: '3' })
   const [teamName, setTeamName] = useState('')
   const [teamCreated, setTeamCreated] = useState<{ name: string; code: string } | null>(null)
-  const [inviteForm, setInviteForm] = useState({ email: '', team_id: '' })
-  const [inviteResult, setInviteResult] = useState<{ email: string; url: string } | null>(null)
+  const [participantForm, setParticipantForm] = useState({ email: '', name: '', team_id: '' })
+  const [participantTeams, setParticipantTeams] = useState<Record<string, string>>({})
+  const [participantBusy, setParticipantBusy] = useState(false)
+  const [resetTarget, setResetTarget] = useState<string | null>(null)
+  const [resetPassword, setResetPassword] = useState('')
   const [rosterFilter, setRosterFilter] = useState('')
   const [configText, setConfigText] = useState('')
   const [configDirty, setConfigDirty] = useState(false)
@@ -105,11 +106,30 @@ export default function AdminManagement() {
   }, [configQ.data, configDirty])
 
   useEffect(() => {
+    if (!teams.length) {
+      setParticipantForm((old) => ({ ...old, team_id: '' }))
+      return
+    }
+    if (!teams.some((team) => team.id === participantForm.team_id)) {
+      setParticipantForm((old) => ({ ...old, team_id: teams[0].id }))
+    }
+    setParticipantTeams((old) => {
+      const next = { ...old }
+      for (const participant of participants) {
+        if (!next[participant.id]) next[participant.id] = participant.team_id
+      }
+      return next
+    })
+  }, [teams, participants, participantForm.team_id])
+
+  useEffect(() => {
     setConfigDirty(false)
     setConfigReason('')
     setFreezeConfig(false)
-    setInviteResult(null)
-    setInviteForm({ email: '', team_id: '' })
+    setParticipantForm({ email: '', name: '', team_id: '' })
+    setParticipantTeams({})
+    setResetTarget(null)
+    setResetPassword('')
     setScoreForm({ team_id: '', points: '', reason: '', confirmed: false })
     setTeamCreated(null)
     setNotice(null)
@@ -172,25 +192,94 @@ export default function AdminManagement() {
     }
   }
 
-  async function createInvite(e: React.FormEvent) {
+  async function registerParticipant(e: React.FormEvent) {
     e.preventDefault()
-    if (!eventId) return
-    setBusy(true)
+    if (!eventId || !participantForm.team_id || !scoreElevated || user?.role !== 'admin') return
+    setParticipantBusy(true)
     clearMessages()
     try {
-      const result = await api<InviteResult>(`/v1/admin/events/${eventId}/invites`, {
-        method: 'POST',
-        body: { email: inviteForm.email.trim().toLowerCase(), team_id: inviteForm.team_id || null, role: 'participant' },
+      const result = await api<{ participant_id: string; password_setup_required: boolean }>(
+        `/v1/admin/events/${eventId}/participants`,
+        {
+          method: 'POST',
+          body: {
+            email: participantForm.email.trim().toLowerCase(),
+            name: participantForm.name.trim(),
+            team_id: participantForm.team_id,
+          },
+        },
+      )
+      setParticipantForm({ email: '', name: '', team_id: '' })
+      setNotice(
+        result.password_setup_required
+          ? 'Participant registered without a password. They set their initial password on first sign-in.'
+          : 'Existing participant account assigned to this event team.',
+      )
+      await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
+      await queryClient.invalidateQueries({ queryKey: ['admin-teams', eventId] })
+    } catch (err) {
+      showError(err)
+    } finally {
+      setParticipantBusy(false)
+    }
+  }
+
+  async function reassignParticipant(participantId: string) {
+    const team_id = participantTeams[participantId]
+    if (!eventId || !team_id || !scoreElevated || user?.role !== 'admin') return
+    setParticipantBusy(true)
+    clearMessages()
+    try {
+      await api(`/v1/admin/events/${eventId}/participants/${participantId}/team`, {
+        method: 'PATCH',
+        body: { team_id },
       })
-      const url = new URL(result.activation_url, window.location.origin).toString()
-      setInviteResult({ email: inviteForm.email.trim(), url })
-      setInviteForm({ email: '', team_id: '' })
-      setNotice('Invitation created. Share the one-time activation link through your approved private channel.')
+      setNotice('Participant team assignment updated.')
+      await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
+      await queryClient.invalidateQueries({ queryKey: ['admin-teams', eventId] })
+    } catch (err) {
+      showError(err)
+    } finally {
+      setParticipantBusy(false)
+    }
+  }
+
+  async function removeParticipant(participant: AdminParticipant) {
+    if (!eventId || !scoreElevated || user?.role !== 'admin') return
+    if (!window.confirm(`Remove ${participant.email} from this event?`)) return
+    setParticipantBusy(true)
+    clearMessages()
+    try {
+      await api(`/v1/admin/events/${eventId}/participants/${participant.id}`, { method: 'DELETE' })
+      setNotice('Participant removed from this event. Their sessions are revoked if they had no other event team membership.')
+      await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
+      await queryClient.invalidateQueries({ queryKey: ['admin-teams', eventId] })
+      setResetTarget(null)
+      setResetPassword('')
+    } catch (err) {
+      showError(err)
+    } finally {
+      setParticipantBusy(false)
+    }
+  }
+
+  async function resetParticipantPassword(participant: AdminParticipant) {
+    if (!scoreElevated || user?.role !== 'admin' || resetPassword.length < 12) return
+    setParticipantBusy(true)
+    clearMessages()
+    try {
+      await api(`/v1/admin/users/${participant.id}/password-reset`, {
+        method: 'POST',
+        body: { password: resetPassword },
+      })
+      setNotice(`Password reset for ${participant.email}. Share the new password privately; existing sessions were revoked.`)
+      setResetTarget(null)
+      setResetPassword('')
       await queryClient.invalidateQueries({ queryKey: ['admin-participants', eventId] })
     } catch (err) {
       showError(err)
     } finally {
-      setBusy(false)
+      setParticipantBusy(false)
     }
   }
 
@@ -309,6 +398,13 @@ export default function AdminManagement() {
 
       {eventId && (
         <>
+          {user?.role === 'admin' && (
+            <StepUpPanel
+              stepUpUntil={stepUpUntil}
+              onStepUp={setStepUpUntil}
+              note="Participant registration, team changes, removals, password resets and manual scoring require fresh password confirmation."
+            />
+          )}
           <Panel exhibit="01" title="Stage creation">
             <form onSubmit={createStage} className="stack" style={{ gap: 12 }}>
               <div className="grid-2">
@@ -368,30 +464,34 @@ export default function AdminManagement() {
               </div>
             </Panel>
 
-            <Panel exhibit="03" title="Invite participant">
-              <form onSubmit={createInvite} className="stack" style={{ gap: 12 }}>
-                <Field label="Participant email" htmlFor="invite-email" required>
-                  <input id="invite-email" className="input" type="email" autoComplete="email" required value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })} />
-                </Field>
-                <Field label="Assign team" htmlFor="invite-team" hint="Optional. You can create an invitation before assigning a team.">
-                  <select id="invite-team" className="select" value={inviteForm.team_id} onChange={(e) => setInviteForm({ ...inviteForm, team_id: e.target.value })}>
-                    <option value="">No team yet</option>
-                    {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-                  </select>
-                </Field>
-                <Button type="submit" variant="primary" disabled={busy || !inviteForm.email}>Create invitation</Button>
-              </form>
-              {inviteResult && (
-                <div className="banner banner-tone-info" style={{ marginTop: 12 }}>
-                  <div className="banner-title">One-time invitation for {inviteResult.email}</div>
-                  <p className="small">The token is shown once here. Copy the link and send it only to the invited participant.</p>
-                  <input className="input mono-input" readOnly value={inviteResult.url} aria-label="Invitation activation URL" />
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-                    <Button size="sm" onClick={() => void navigator.clipboard?.writeText(inviteResult.url)}>Copy activation link</Button>
-                    <a className="btn btn-ghost btn-sm" href={inviteResult.url} target="_blank" rel="noreferrer">Open link</a>
-                  </div>
-                </div>
+            <Panel exhibit="03" title="Register participant">
+              {user?.role === 'admin' ? (
+                <>
+                  <form onSubmit={registerParticipant} className="stack" style={{ gap: 12 }}>
+                    <Field label="Participant email" htmlFor="participant-email" required>
+                      <input id="participant-email" className="input" type="email" autoComplete="email" required value={participantForm.email} onChange={(e) => setParticipantForm({ ...participantForm, email: e.target.value })} />
+                    </Field>
+                    <Field label="Participant name" htmlFor="participant-name" required>
+                      <input id="participant-name" className="input" minLength={2} maxLength={160} required value={participantForm.name} onChange={(e) => setParticipantForm({ ...participantForm, name: e.target.value })} />
+                    </Field>
+                    <Field label="Assign team" htmlFor="participant-team" required>
+                      <select id="participant-team" className="select" value={participantForm.team_id} onChange={(e) => setParticipantForm({ ...participantForm, team_id: e.target.value })} required>
+                        <option value="">Select team</option>
+                        {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                      </select>
+                    </Field>
+                    <Button type="submit" variant="primary" disabled={participantBusy || !scoreElevated || !participantForm.email || participantForm.name.trim().length < 2 || !participantForm.team_id}>
+                      {participantBusy ? 'Registering' : 'Register participant'}
+                    </Button>
+                  </form>
+                  <p className="muted small" style={{ marginTop: 12 }}>
+                    Registration is admin-only. No invitation or activation token is issued. The account is created without a password; the participant chooses the initial password on first sign-in.
+                  </p>
+                </>
+              ) : (
+                <p className="muted small">Only an administrator can register, reassign, remove, or reset passwords for participants.</p>
               )}
+            </Panel>
             </Panel>
           </div>
 
@@ -402,25 +502,66 @@ export default function AdminManagement() {
             </div>
             {participantsQ.isLoading && <LoadingShell label="Loading participant roster" />}
             {participantsQ.isError && <ErrorBanner error={participantsQ.error} onRetry={() => void participantsQ.refetch()} />}
-            {participantsQ.data && filteredParticipants.length === 0 && <EmptyState title="No matching roster entries" note="Create participant invitations above. Pending invitations appear until activated." />}
+            {participantsQ.data && filteredParticipants.length === 0 && <EmptyState title="No matching participants" note="Register participants above. Each account belongs to one team in this event." />}
             {filteredParticipants.length > 0 && (
               <div className="table-scroll">
                 <table className="table">
-                  <thead><tr><th>Email</th><th>Name</th><th>Team</th><th>Role</th><th>Account</th><th>Invitation</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Email</th><th>Name</th><th>Team</th><th>Role</th><th>Account</th><th>Password</th>
+                      {user?.role === 'admin' && <th>Admin controls</th>}
+                    </tr>
+                  </thead>
                   <tbody>
-                    {filteredParticipants.map((participant, index) => (
-                      <tr key={`${participant.id ?? participant.email}-${index}`}>
+                    {filteredParticipants.map((participant) => (
+                      <tr key={participant.id}>
                         <td className="mono small">{participant.email}</td>
-                        <td>{participant.name ?? 'Not activated'}</td>
-                        <td>{participant.team_name ?? 'Unassigned'}</td>
+                        <td>{participant.name}</td>
+                        <td>{participant.team_name}</td>
                         <td>{participant.role}</td>
                         <td><StatusChip value={participant.status} /></td>
-                        <td>
-                          <Chip tone={participant.activated ? 'ok' : 'warn'}>{participant.activated ? 'activated' : 'pending'}</Chip>
-                          <div className="muted small">
-                            {participant.expires_at ? `Expires ${fmtDateTime(participant.expires_at)}` : participant.activated ? 'Active member' : 'No expiry recorded'}
-                          </div>
-                        </td>
+                        <td><Chip tone={participant.password_set ? 'ok' : 'warn'}>{participant.password_set ? 'set' : 'first sign-in pending'}</Chip></td>
+                        {user?.role === 'admin' && (
+                          <td style={{ minWidth: 260 }}>
+                            <div className="stack" style={{ gap: 8 }}>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <select
+                                  className="select"
+                                  aria-label={`Team for ${participant.email}`}
+                                  value={participantTeams[participant.id] ?? participant.team_id}
+                                  onChange={(e) => setParticipantTeams((old) => ({ ...old, [participant.id]: e.target.value }))}
+                                >
+                                  {teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                                </select>
+                                <Button size="sm" disabled={participantBusy || !scoreElevated || (participantTeams[participant.id] ?? participant.team_id) === participant.team_id} onClick={() => void reassignParticipant(participant.id)}>Move</Button>
+                              </div>
+                              {resetTarget === participant.id ? (
+                                <div className="stack" style={{ gap: 6 }}>
+                                  <input
+                                    className="input mono-input"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    minLength={12}
+                                    maxLength={200}
+                                    aria-label={`New password for ${participant.email}`}
+                                    placeholder="New password (12+ chars)"
+                                    value={resetPassword}
+                                    onChange={(e) => setResetPassword(e.target.value)}
+                                  />
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    <Button size="sm" variant="primary" disabled={participantBusy || !scoreElevated || resetPassword.length < 12} onClick={() => void resetParticipantPassword(participant)}>Reset password</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => { setResetTarget(null); setResetPassword('') }}>Cancel</Button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                  <Button size="sm" variant="secondary" disabled={participantBusy || !scoreElevated} onClick={() => { setResetTarget(participant.id); setResetPassword('') }}>Reset password</Button>
+                                  <Button size="sm" variant="danger" disabled={participantBusy || !scoreElevated} onClick={() => void removeParticipant(participant)}>Remove</Button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -428,7 +569,7 @@ export default function AdminManagement() {
               </div>
             )}
             <p className="muted small" style={{ marginTop: 10 }}>
-              This API exposes invitation-backed roster rows. Revoking invitations or moving existing users between teams requires dedicated backend mutation endpoints and is not implied by this read-only roster.
+              Participant registration, team changes, removal and password resets are server-enforced admin-only actions. Password reset revokes the participant's existing sessions.
             </p>
           </Panel>
 
@@ -509,8 +650,6 @@ export default function AdminManagement() {
           </Panel>
 
           {user?.role === 'admin' && (
-            <>
-            <StepUpPanel stepUpUntil={stepUpUntil} onStepUp={setStepUpUntil} note="Manual score changes affect the append-only score ledger. Reconfirm your password before enabling this operation." />
             <Panel exhibit="07" title="Manual score adjustment" actions={!scoreElevated ? <StepUpGateHint /> : undefined}>
               <form onSubmit={adjustScore} className="stack" style={{ gap: 12 }}>
                 <div className="grid-2">
@@ -543,7 +682,6 @@ export default function AdminManagement() {
                 <p className="muted small">This control is restricted to administrators and requires a fresh password confirmation. The server enforces both checks.</p>
               </form>
             </Panel>
-            </>
           )}
         </>
       )}
