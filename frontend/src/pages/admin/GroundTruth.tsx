@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation } from 'react-router-dom'
 import { api, ApiRequestError } from '../../lib/api'
-import type { AdminEvent, ChallengeVersion } from '../../lib/types'
+import type { AdminEvent, ChallengeVersion, GroundTruthFlag } from '../../lib/types'
 import { CATEGORIES, SEVERITIES } from '../../lib/types'
 import { Button, EmptyState, ErrorBanner, Field, LoadingShell, Panel, StatusChip } from '../../ui/components'
 import { adminErrorText, StepUpGateHint, StepUpPanel } from '../../components/StepUp'
@@ -39,6 +39,12 @@ export default function AdminGroundTruth() {
   const elevated = stepUpUntil !== null && stepUpUntil > Date.now()
   const [bug, setBug] = useState(emptyBug)
   const [flag, setFlag] = useState({ flag_key: '', code: '', points: '25', max_awards: '99' })
+  const [editingFlagId, setEditingFlagId] = useState<string | null>(null)
+  const flagsQ = useQuery({
+    queryKey: ['ground-truth-flags', challengeId, elevated],
+    queryFn: () => api<{ flags: GroundTruthFlag[] }>(`/v1/admin/challenges/${challengeId}/ground-truth/flags`),
+    enabled: !!challengeId && elevated,
+  })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -102,28 +108,51 @@ export default function AdminGroundTruth() {
     }
   }
 
-  async function createFlag(e: React.FormEvent) {
+  async function saveFlag(e: React.FormEvent) {
     e.preventDefault()
     if (!challengeId) return
     setBusy(true)
     resetMessages()
     try {
-      await api(`/v1/admin/challenges/${challengeId}/ground-truth/flags`, {
-        method: 'POST',
-        body: {
-          flag_key: flag.flag_key.trim(),
-          code: flag.code.trim(),
-          points: Number(flag.points),
-          max_awards: Number(flag.max_awards),
-        },
-      })
+      const body: Record<string, string | number> = {
+        flag_key: flag.flag_key.trim(),
+        points: Number(flag.points),
+        max_awards: Number(flag.max_awards),
+      }
+      if (flag.code.trim()) body.code = flag.code.trim()
+      if (editingFlagId) {
+        await api(`/v1/admin/challenges/${challengeId}/ground-truth/flags/${editingFlagId}`, {
+          method: 'PATCH',
+          body,
+        })
+        setNotice('Ground-truth flag updated. Existing code remains unchanged unless a new code was provided.')
+      } else {
+        if (!flag.code.trim()) throw new Error('A new flag requires a code.')
+        await api(`/v1/admin/challenges/${challengeId}/ground-truth/flags`, {
+          method: 'POST',
+          body,
+        })
+        setNotice('Ground-truth flag created. The raw flag value is stored only as a hash.')
+      }
+      setEditingFlagId(null)
       setFlag({ flag_key: '', code: '', points: '25', max_awards: '99' })
-      setNotice('Ground-truth flag added. The raw flag value is not returned by the API.')
+      await flagsQ.refetch()
     } catch (err) {
       fail(err)
     } finally {
       setBusy(false)
     }
+  }
+
+  function editFlag(existing: GroundTruthFlag) {
+    setEditingFlagId(existing.id)
+    setFlag({
+      flag_key: existing.flag_key,
+      code: '',
+      points: String(existing.points),
+      max_awards: String(existing.max_awards),
+    })
+    resetMessages()
   }
 
   const challenges = challengesQ.data?.challenges ?? []
@@ -227,12 +256,12 @@ export default function AdminGroundTruth() {
           </form>
         </Panel>
 
-        <Panel exhibit="02" title="Add CTF flag" actions={!elevated ? <StepUpGateHint /> : undefined}>
-          <form onSubmit={createFlag} className="stack" style={{ gap: 12 }}>
+        <Panel exhibit="02" title={editingFlagId ? 'Edit CTF flag' : 'Add CTF flag'} actions={!elevated ? <StepUpGateHint /> : undefined}>
+          <form onSubmit={saveFlag} className="stack" style={{ gap: 12 }}>
             <Field label="Flag key" htmlFor="flag-key" required hint="Stable award-unit identifier, unique within the challenge.">
               <input id="flag-key" className="input mono-input" maxLength={40} required value={flag.flag_key} onChange={(e) => setFlag({ ...flag, flag_key: e.target.value })} disabled={!elevated} />
             </Field>
-            <Field label="Flag code" htmlFor="flag-code" required hint="The raw code is sent once to the API and stored as a hash.">
+            <Field label="Flag code" htmlFor="flag-code" required={!editingFlagId} hint={editingFlagId ? "Leave empty to keep the existing secret. A new value replaces the stored hash." : "The raw code is sent once to the API and stored as a hash."}>
               <input id="flag-code" className="input mono-input" minLength={4} maxLength={200} required value={flag.code} onChange={(e) => setFlag({ ...flag, code: e.target.value })} disabled={!elevated} autoComplete="off" />
             </Field>
             <div className="grid-2">
@@ -243,11 +272,30 @@ export default function AdminGroundTruth() {
                 <input id="flag-awards" className="input mono-input" type="number" min={1} max={10000} required value={flag.max_awards} onChange={(e) => setFlag({ ...flag, max_awards: e.target.value })} disabled={!elevated} />
               </Field>
             </div>
-            <Button type="submit" variant="primary" disabled={busy || !elevated || !challengeId}>Add flag</Button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button type="submit" variant="primary" disabled={busy || !elevated || !challengeId || (!editingFlagId && !flag.code.trim())}>{editingFlagId ? 'Save flag changes' : 'Create flag'}</Button>
+              {editingFlagId && <Button type="button" variant="secondary" disabled={busy} onClick={() => { setEditingFlagId(null); setFlag({ flag_key: '', code: '', points: '25', max_awards: '99' }) }}>Cancel edit</Button>}
+            </div>
           </form>
+          <div className="ruled" style={{ marginTop: 16 }}>
+            <div className="overline" style={{ padding: '10px 0' }}>Existing flags</div>
+            {flagsQ.isLoading && <LoadingShell label="Loading flag metadata" />}
+            {flagsQ.isError && <ErrorBanner error={flagsQ.error} onRetry={() => void flagsQ.refetch()} />}
+            {flagsQ.data?.flags.length === 0 && <p className="muted small">No flags have been created for this challenge.</p>}
+            {(flagsQ.data?.flags ?? []).map((existing) => (
+              <div className="kv-row" key={existing.id} style={{ alignItems: 'center', gap: 10 }}>
+                <div>
+                  <strong className="mono">{existing.flag_key}</strong>
+                  <div className="muted small">{existing.points} points · max {existing.max_awards} awards</div>
+                  <div className="muted small">Created {new Date(existing.created_at).toLocaleString()}</div>
+                </div>
+                <Button size="sm" variant="secondary" disabled={!elevated || busy} onClick={() => editFlag(existing)}>Edit</Button>
+              </div>
+            ))}
+          </div>
           <div className="banner banner-tone-warn" style={{ marginTop: 14 }}>
             <div className="banner-title">Treat flag codes as secrets</div>
-            <div className="small">The API stores a hash, but the code will still pass through this browser during creation. Do not paste it into notes, screenshots or shared logs.</div>
+            <div className="small">The listing contains only editable metadata. Plaintext codes and stored hashes are never returned. A new code is sent once to the API and stored as a hash.</div>
           </div>
         </Panel>
       </div>
