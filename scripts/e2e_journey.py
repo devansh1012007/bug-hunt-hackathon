@@ -2,7 +2,7 @@
 """End-to-end journey verification against a RUNNING platform (API + worker).
 
 Exercises the P0 journeys from ONE_SHOT_ACCEPTANCE_CRITERIA.md:
-organizer lifecycle, participant activation->lobby->report submission with
+organizer lifecycle, pre-registered participant first sign-in->lobby->report submission with
 idempotency, reviewer decision, scoring ledger, CTF flags, release, results,
 dispute. Prints PASS/FAIL per step and exits nonzero on any failure.
 
