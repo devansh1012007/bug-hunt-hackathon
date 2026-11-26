@@ -1,4 +1,4 @@
-Status: describes the implementation as of 2026-11-22
+Status: describes the implementation as of 2026-11-26
 
 # Deployment Runbook
 
@@ -26,7 +26,7 @@ Steps:
    - Runs as `PGUSER=pgadmin` (the database owner).
    - Creates `app.schema_migrations` and applies `backend/migrations/*.sql` in order.
 3. Seed (dev only, known credentials): `cd backend && python seed.py` (add `--reset` to clear first).
-   - Prints staff/participant credentials (`Dev-only!Passw0rd!`) and the organizer invite token once.
+   - Prints the seeded staff/participant credentials (`Dev-only!Passw0rd!`). The seed no longer creates or prints invite tokens.
    - Never run against a live deployment.
    - Shortcut: `bash scripts/run_dev.sh` performs steps 1-4 (add `--no-seed` / `--reset-seed`).
 4. API + worker:
@@ -80,8 +80,16 @@ Procedure:
 8. First-boot checks (before any users):
    - `/health` shows both databases up.
    - Re-run the pytest role tests against the production database to prove the grant boundary.
-   - Organizer pass-through: create event -> readiness items visible -> create challenge, upload the 11 participant files, freeze, publish, enter ground truth via the gt endpoints (step-up required) -> invite one test participant -> submit one report and one flag end to end.
+   - Admin pass-through: create event and teams -> register a participant from the admin setup page (email, name, team) -> verify the account has no password -> first sign-in with that registered email sets the initial password -> sign in again to verify password checking -> create challenge, upload the participant files, freeze, publish, enter ground truth via the GT endpoints (step-up required) -> submit one report and one flag end to end.
 9. Backups before going live: see BACKUP_AND_RECOVERY.md; the restore drill is a readiness gate (`backup_restore`).
+
+## Event-specific account lifecycle
+
+- Participant accounts are created only by an administrator from the event's participant management screen. Registration requires an email address, a name, and a team in that event.
+- No invitation token or activation URL is generated. The public `/auth/activate` route is not registered for this event.
+- On first sign-in, the server checks that the email is already in the users table. An unknown email is rejected with the generic invalid-credentials response. If the registered user has no password hash, the submitted password becomes the initial password; later sign-ins verify it normally.
+- This deliberately does not verify mailbox ownership for the first password claim. The event accepts the risk that someone who knows a registered email could claim its initial password before the intended participant. Admin registration and controlled distribution of the registered email are the trust boundary.
+- Password recovery is not self-service. An administrator resets a participant's password from the admin console after a fresh step-up check; the reset revokes all of the target account's sessions and refresh tokens. The new password must be delivered to the participant through an approved private channel.
 
 ## 3. Event-day launch sequence
 
@@ -124,7 +132,7 @@ Procedure:
 - A wrong stage start can be adjusted with `extend` (1..3600 s) or per-user `time_adjustments` with reason codes.
   - Pause/resume has the partially-implemented ends_at restoration caveat documented in SYSTEM_ARCHITECTURE.md Section 5.2.
   - Prefer `extend` after an outage rather than relying on `resume` time restoration.
-- A compromised account: revoke the session via the user's own endpoint, or set the user disqualified (every request 403s) and bump token_version via password reset.
+- A compromised account: an admin can reset the account password from the admin console. This increments `token_version` and revokes all active sessions and refresh tokens. A reset is admin-only and requires a fresh password step-up.
 - Full host loss (D1): restore per BACKUP_AND_RECOVERY.md on a fresh VM; the SPA on Cloudflare Pages can display a status notice; do not claim automatic failover (master guide: no fake failover claims).
 - Change freeze: no code or config changes during an active round except the documented control actions (OPS-03).
   - If a fix is unavoidable, it goes through rehearsal on D0 first and is announced.
