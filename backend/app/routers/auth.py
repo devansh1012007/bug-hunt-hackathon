@@ -93,6 +93,14 @@ def login(body: LoginIn, request: Request, response: Response):
             user = {**user, "password_hash": pw_hash, "status": "active"}
         elif not security.verify_password(body.password, user["password_hash"]):
             raise ApiError("AUTH_INVALID_CREDENTIALS")
+        elif user["status"] == "pending":
+            # A pre-existing passworded pending account becomes active only after
+            # the supplied password has been verified successfully.
+            s.execute(
+                text("UPDATE app.users SET status = 'active' WHERE id = CAST(:uid AS uuid)"),
+                {"uid": str(user["id"])},
+            )
+            user = {**user, "status": "active"}
 
         # Concurrent session limit (AUTH-10), hardened with reclaim + eviction:
         # 1) Reclaim zombie sessions: a session whose refresh tokens are all
