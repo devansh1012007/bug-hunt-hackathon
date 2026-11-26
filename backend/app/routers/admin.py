@@ -199,6 +199,39 @@ def revise_config(event_id: str, body: ConfigIn, request: Request, p: Principal 
     return {"ok": True, "rule_set_hash": rule_set_hash}
 
 
+@router.get("/admin/events/{event_id}/config/revisions")
+def list_config_revisions(event_id: str, p: Principal = Depends(require_organizer)):
+    """Return the event's current config and immutable revision history."""
+    with app_session() as s:
+        event = (
+            s.execute(
+                text("SELECT config, config_version FROM app.events WHERE id = CAST(:e AS uuid)"),
+                {"e": event_id},
+            )
+            .mappings()
+            .first()
+        )
+        if event is None:
+            raise ApiError("NOT_FOUND")
+        rows = (
+            s.execute(
+                text(
+                    "SELECT version, config, rule_set_hash, reason, created_at, frozen_at "
+                    "FROM app.event_config_revisions WHERE event_id = CAST(:e AS uuid) "
+                    "ORDER BY version DESC LIMIT 100"
+                ),
+                {"e": event_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {
+        "config_version": int(event["config_version"]),
+        "current_config": event["config"] or {},
+        "revisions": [dict(row) for row in rows],
+    }
+
+
 @router.get("/admin/events")
 def list_events(p: Principal = Depends(require_organizer)):
     with app_session() as s:
@@ -467,6 +500,31 @@ def create_team(event_id: str, body: TeamIn, request: Request, p: Principal = De
     return {"team_id": team_id, "join_code": join_code}
 
 
+@router.get("/admin/events/{event_id}/teams")
+def list_teams(event_id: str, p: Principal = Depends(require_organizer)):
+    """List teams for one event; used by invitation and scoring controls."""
+    with app_session() as s:
+        if s.execute(
+            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+            {"e": event_id},
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+        rows = (
+            s.execute(
+                text(
+                    "SELECT t.id, t.name, t.join_code, t.status, count(DISTINCT tm.user_id) AS member_count "
+                    "FROM app.teams t LEFT JOIN app.team_members tm ON tm.team_id = t.id "
+                    "WHERE t.event_id = CAST(:e AS uuid) "
+                    "GROUP BY t.id, t.name, t.join_code, t.status ORDER BY t.name"
+                ),
+                {"e": event_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {"teams": [dict(row) for row in rows]}
+
+
 class InviteIn(BaseModel):
     email: str
     team_id: str | None = None
@@ -482,6 +540,23 @@ def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal 
     raw = secrets.token_urlsafe(32)
     with app_session() as s:
         from datetime import datetime, timedelta
+
+        if s.execute(
+            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"), {"e": event_id}
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+        if body.role not in ("participant", "reviewer", "organizer", "admin"):
+            raise ApiError("VALIDATION_ERROR", details={"role": "Unsupported invite role."})
+        if body.role != "participant" and p.role != "admin":
+            raise ApiError("AUTH_FORBIDDEN", message="Only an admin can invite privileged accounts.")
+        if body.team_id:
+            team = s.execute(
+                text("SELECT event_id FROM app.teams WHERE id = CAST(:t AS uuid)"), {"t": body.team_id}
+            ).first()
+            if team is None or str(team[0]) != event_id:
+                raise ApiError("VALIDATION_ERROR", details={"team_id": "The team must belong to this event."})
+            if body.role != "participant":
+                raise ApiError("VALIDATION_ERROR", details={"team_id": "Only participant invites can be assigned to a team."})
 
         s.execute(
             text(
@@ -513,14 +588,21 @@ def create_invite(event_id: str, body: InviteIn, request: Request, p: Principal 
 
 @router.get("/admin/events/{event_id}/participants")
 def list_participants(event_id: str, p: Principal = Depends(require_organizer)):
+    """List invitation-backed roster entries, including pending users."""
     with app_session() as s:
         rows = (
             s.execute(
                 text(
-                    "SELECT u.id, u.email, u.name, u.role, u.status, t.name AS team_name, i.used_at IS NOT NULL AS activated "
+                    "SELECT u.id, i.email, u.name, i.role, COALESCE(u.status, 'invited') AS status, "
+                    "COALESCE(member_team.id, invited_team.id) AS team_id, "
+                    "COALESCE(member_team.name, invited_team.name) AS team_name, "
+                    "i.used_at IS NOT NULL AS activated, i.created_at, i.expires_at "
                     "FROM app.invites i LEFT JOIN app.users u ON lower(u.email) = i.email "
-                    "LEFT JOIN app.team_members tm ON tm.user_id = u.id LEFT JOIN app.teams t ON t.id = tm.team_id "
-                    "WHERE i.event_id = CAST(:e AS uuid) ORDER BY i.created_at DESC LIMIT 500"
+                    "LEFT JOIN app.team_members tm ON tm.user_id = u.id "
+                    "LEFT JOIN app.teams member_team ON member_team.id = tm.team_id AND member_team.event_id = i.event_id "
+                    "LEFT JOIN app.teams invited_team ON invited_team.id = i.team_id "
+                    "WHERE i.event_id = CAST(:e AS uuid) "
+                    "ORDER BY i.created_at DESC LIMIT 500"
                 ),
                 {"e": event_id},
             )
@@ -561,6 +643,30 @@ def create_challenge(event_id: str, body: ChallengeIn, request: Request, p: Prin
             event_scope=f"event:{event_id}",
         )
     return {"challenge_id": cid}
+
+
+@router.get("/admin/events/{event_id}/challenges")
+def list_challenge_versions(event_id: str, p: Principal = Depends(require_organizer)):
+    """List safe challenge metadata; ground-truth secrets are never returned."""
+    with app_session() as s:
+        if s.execute(
+            text("SELECT 1 FROM app.events WHERE id = CAST(:e AS uuid)"),
+            {"e": event_id},
+        ).first() is None:
+            raise ApiError("NOT_FOUND")
+        rows = (
+            s.execute(
+                text(
+                    "SELECT id, slug, title, version, status, content_hash, frozen_at, published_at, created_at "
+                    "FROM app.challenge_versions WHERE event_id = CAST(:e AS uuid) "
+                    "ORDER BY created_at DESC LIMIT 200"
+                ),
+                {"e": event_id},
+            )
+            .mappings()
+            .all()
+        )
+    return {"challenges": [dict(row) for row in rows]}
 
 
 @router.post("/admin/challenges/{challenge_id}/files")
