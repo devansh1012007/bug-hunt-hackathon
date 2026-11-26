@@ -459,7 +459,20 @@ export default function AdminManagement() {
                         <div className="muted small">{revision.reason}</div>
                         <div className="mono small muted">{revision.rule_set_hash}</div>
                       </div>
-                      <div className="muted small">{fmtDateTime(revision.created_at)}</div>
+                      <div className="stack" style={{ alignItems: 'flex-end', gap: 6 }}>
+                        <div className="muted small">{fmtDateTime(revision.created_at)}</div>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setConfigText(JSON.stringify(revision.config, null, 2))
+                            setConfigReason(`Create a new revision based on v${revision.version}`)
+                            setFreezeConfig(false)
+                            setConfigDirty(true)
+                          }}
+                        >
+                          Load into editor
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
