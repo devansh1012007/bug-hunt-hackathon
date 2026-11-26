@@ -486,7 +486,7 @@ export default function AdminManagement() {
                     </Button>
                   </form>
                   <p className="muted small" style={{ marginTop: 12 }}>
-                    Registration is admin-only. No invitation or activation token is issued. The account is created without a password; the participant chooses the initial password on first sign-in.
+                    Registration is admin-only. No invitation or activation token is issued. New accounts start without a password; existing registered participant accounts keep their current password. A participant without a password chooses it on first sign-in.
                   </p>
                 </>
               ) : (
