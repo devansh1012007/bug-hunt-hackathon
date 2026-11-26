@@ -4,7 +4,7 @@ Status: CURRENT as of the v1 one-shot build. A self-review by the build team, no
 
 ## Scope
 
-Reviewed: auth flows (login, refresh rotation, step-up, activation), RBAC (participant/reviewer/organizer), ground truth isolation, the submissions transaction (idempotency, locks, caps, cooldown), rate limits, response headers, path handling on challenge file reads, the audit hash chain, and frontend XSS posture.
+Reviewed: auth flows (login, refresh rotation, step-up, admin registration, first-password claim, admin-only reset), RBAC (participant/reviewer/organizer), ground truth isolation, the submissions transaction (idempotency, locks, caps, cooldown), rate limits, response headers, path handling on challenge file reads, the audit hash chain, and frontend XSS posture.
 
 ## Method
 
@@ -24,7 +24,7 @@ Reviewed: auth flows (login, refresh rotation, step-up, activation), RBAC (parti
 | F-05 | MFA absent | Medium | Accepted risk, P1. Interim control: password re-entry step-up on sensitive actions (ADR-008). Follow-up WebAuthn/Cloudflare Access. |
 | F-06 | In-process rate limiter is per replica | Medium | Accepted for single-VM D1. DB-backed quotas cover submission caps only. Redis/shared limiter before any second replica (L-05). |
 | F-07 | No external penetration test | Medium | PENDING. No external reviewer engaged yet; see KNOWNS_LIMITATIONS_AND_FOLLOWUPS L-13-related entry F-07 in ONE_SHOT_ACCEPTANCE_CRITERIA. |
-| F-08 | Email/username enumeration via login or reset | Medium | Mitigated: generic error messages, no account-existence signals (errors.py envelope, invariant 7). Tested in auth tests. |
+| F-08 | Email/username enumeration and first-password claim | Medium | Unknown emails receive generic login errors; registration and password reset are admin-only; legacy invite/reset token stores are removed. Accepted event-specific residual risk: the first person who knows a registered email can claim its initial password without mailbox verification. Tested in auth tests. |
 | F-09 | XSS via participant-submitted content | Medium | Mitigated: React rendering as text, no `dangerouslySetInnerHTML` in `frontend/src/` (verified by grep of the source tree). Code viewer is read-only text. |
 | F-10 | Secrets in repo or logs | High | Mitigated: configuration is env-only (`backend/app/config.py`), dev defaults marked dev-only; GitHub token handling rules in AGENTS.md (never in source, env.example, history, logs, commits). No credentials found in tracked files during review. |
 
