@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from pydantic import BaseModel, EmailStr, Field
