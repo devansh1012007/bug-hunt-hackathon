@@ -384,3 +384,46 @@ export const DECISIONS = [
 ] as const
 
 export const RUBRIC_KEYS = ['functionality', 'root_cause', 'code_quality', 'testing', 'evidence'] as const
+
+
+export interface AdminTeam {
+  id: string
+  name: string
+  join_code: string
+  status: string
+  member_count: number
+}
+
+export interface AdminParticipant {
+  id: string | null
+  email: string
+  name: string | null
+  role: Role
+  status: string
+  team_id: string | null
+  team_name: string | null
+  activated: boolean
+  created_at: string
+  expires_at: string
+}
+
+export interface ConfigRevision {
+  version: number
+  config: Record<string, unknown>
+  rule_set_hash: string
+  reason: string
+  created_at: string
+  frozen_at: string | null
+}
+
+export interface ChallengeVersion {
+  id: string
+  slug: string
+  title: string
+  version: number
+  status: string
+  content_hash: string | null
+  frozen_at: string | null
+  published_at: string | null
+  created_at: string
+}
