@@ -80,10 +80,6 @@ def stage_release_blockers(session: Session, stage_id: str) -> dict[str, int]:
     }
 
 
-def _release_is_blocked(blockers: dict[str, int]) -> bool:
-    return any(blockers.values())
-
-
 def enqueue(session: Session, kind: str, payload: dict, *, max_attempts: int = 5) -> str:
     job_id = str(uuid7())
     session.execute(
