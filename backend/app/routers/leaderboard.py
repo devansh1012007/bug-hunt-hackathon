@@ -69,9 +69,10 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
                 text(
                     "SELECT version, payload, created_at FROM app.leaderboard_snapshots "
                     "WHERE stage_id = CAST(:s AS uuid) AND created_at <= :cutoff "
+                    "AND (:published_at IS NULL OR created_at >= :published_at) "
                     "ORDER BY version DESC LIMIT 1"
                 ),
-                {"s": stage_id, "cutoff": cutoff},
+                {"s": stage_id, "cutoff": cutoff, "published_at": stage["results_published_at"]},
             )
             .mappings()
             .first()
