@@ -23,7 +23,7 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
     with app_session() as s:
         stage = (
             s.execute(
-                text("SELECT id, config, status FROM app.stages WHERE id = CAST(:s AS uuid)"),
+                text("SELECT id, config, status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
                 {"s": stage_id},
             )
             .mappings()
@@ -31,6 +31,13 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
         )
         if stage is None:
             raise ApiError("NOT_FOUND")
+        # Participant access is gated by completed publication, not by a
+        # configurable live/frozen mode. The mode controls presentation only
+        # after the organizer's release job has committed all score entries.
+        if p.role == "participant" and (
+            stage["status"] not in ("released", "final") or stage["results_published_at"] is None
+        ):
+            return {"visible": False, "message": "Results have not been released yet."}
         cfg = stage["config"] or {}
         mode = cfg.get("leaderboard_mode", "hidden")
         released = stage["status"] in ("released", "final")
@@ -66,42 +73,60 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
 def my_results(stage_id: str, p: Principal = Depends(get_principal)):
     require_role("participant")(p)
     with app_session() as s:
-        released = s.execute(
-            text(
-                "SELECT COALESCE(BOOL_OR(feedback_released), false) FROM app.submissions WHERE stage_id = CAST(:s AS uuid)"
-            ),
-            {"s": stage_id},
-        ).scalar_one()
-        if not released:
-            return {"released": False, "message": "Results are not released yet."}
+        stage = (
+            s.execute(
+                text(
+                    "SELECT status, event_id, results_published_at FROM app.stages "
+                    "WHERE id = CAST(:s AS uuid)"
+                ),
+                {"s": stage_id},
+            )
+            .mappings()
+            .first()
+        )
+        if stage is None:
+            raise ApiError("NOT_FOUND")
+
+        # Resolve membership inside this stage's event. A user's membership in
+        # a different event must never authorize access to this event's score.
         team = s.execute(
-            text("SELECT team_id FROM app.team_members WHERE user_id = CAST(:u AS uuid) LIMIT 1"),
-            {"u": p.id},
+            text(
+                "SELECT tm.team_id FROM app.team_members tm "
+                "JOIN app.teams t ON t.id = tm.team_id "
+                "WHERE tm.user_id = CAST(:u AS uuid) AND t.event_id = CAST(:e AS uuid) "
+                "ORDER BY tm.joined_at DESC LIMIT 1"
+            ),
+            {"u": p.id, "e": str(stage["event_id"])},
         ).first()
         if team is None:
-            raise ApiError("AUTH_FORBIDDEN", message="No team membership found.")
+            raise ApiError("NOT_FOUND")
+
+        released = stage["status"] in ("released", "final") and stage["results_published_at"] is not None
+        if not released:
+            return {"released": False, "message": "Results are not released yet."}
+
         rows = (
             s.execute(
                 text(
-                    "SELECT l.component, l.kind, l.points, l.reason_code, s.title, s.receipt_code, s.matched_bug_code, s.received_at "
-                    "FROM app.score_ledger_entries l LEFT JOIN app.submissions s ON s.id = l.submission_id "
-                    "WHERE l.stage_id = CAST(:st AS uuid) AND l.team_id = CAST(:t AS uuid) ORDER BY l.created_at"
+                    "SELECT l.component, l.kind, l.points, l.reason_code, s.title, s.receipt_code, "
+                    "s.matched_bug_code, s.received_at "
+                    "FROM app.score_ledger_entries l "
+                    "LEFT JOIN app.submissions s ON s.id = l.submission_id "
+                    "WHERE l.stage_id = CAST(:st AS uuid) AND l.event_id = CAST(:e AS uuid) "
+                    "AND l.team_id = CAST(:t AS uuid) ORDER BY l.created_at, l.id"
                 ),
-                {"st": stage_id, "t": str(team[0])},
+                {"st": stage_id, "e": str(stage["event_id"]), "t": str(team[0])},
             )
             .mappings()
             .all()
         )
         by_component: dict[str, float] = {}
         penalties = 0.0
-        bonuses = 0.0
         items = []
         for r in rows:
             pts = float(r["points"])
             if r["kind"] == "penalty":
                 penalties += pts
-            if r["component"] == "ctf_bonus":
-                bonuses += pts
             by_component[r["component"]] = by_component.get(r["component"], 0.0) + pts
             items.append(
                 {
@@ -115,7 +140,9 @@ def my_results(stage_id: str, p: Principal = Depends(get_principal)):
                     "received_at": r["received_at"].isoformat() if r["received_at"] else None,
                 }
             )
-        total = sum(by_component.values()) + penalties
+        # Every signed ledger entry contributes exactly once. The penalty
+        # subtotal is a display field, not an additional deduction.
+        total = sum(float(r["points"]) for r in rows)
     return {
         "released": True,
         "total": round(total, 2),

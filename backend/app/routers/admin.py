@@ -448,11 +448,12 @@ def release_results(stage_id: str, body: dict, request: Request, p: Principal = 
             raise ApiError("VALIDATION_ERROR", details={"transition": f"Cannot release from {st[0]}."})
         if action == "evaluate":
             s.execute(text("UPDATE app.stages SET status='evaluating' WHERE id = CAST(:s AS uuid)"), {"s": stage_id})
-            enqueue(s, "release_feedback", {"stage_id": stage_id})
+            enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": False})
         elif action == "release":
             s.execute(text("UPDATE app.stages SET status='released' WHERE id = CAST(:s AS uuid)"), {"s": stage_id})
-            enqueue(s, "release_feedback", {"stage_id": stage_id})
-            enqueue(s, "refresh_leaderboard", {"stage_id": stage_id, "visibility": "public"})
+            # The release worker publishes the leaderboard only after the
+            # score ledger and results_published_at marker commit atomically.
+            enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": True})
         audit_write(
             s,
             actor_id=p.id,

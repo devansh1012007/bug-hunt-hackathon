@@ -501,7 +501,7 @@ def release_feedback(payload: dict) -> None:
         stage = (
             session.execute(
                 text(
-                    "SELECT st.id, st.config, e.id AS event_id, e.tenant_id, e.config AS event_config FROM app.stages st JOIN app.events e ON e.id = st.event_id WHERE st.id = CAST(:s AS uuid)"
+                    "SELECT st.id, st.status, st.config, st.results_published_at, e.id AS event_id, e.tenant_id, e.config AS event_config FROM app.stages st JOIN app.events e ON e.id = st.event_id WHERE st.id = CAST(:s AS uuid)"
                 ),
                 {"s": stage_id},
             )
@@ -510,6 +510,12 @@ def release_feedback(payload: dict) -> None:
         )
         if stage is None:
             return
+        publish = bool(payload.get("publish", False))
+        # A stale or forged queue payload cannot publish while the stage is
+        # still evaluating. The organizer transition is the release authority.
+        if publish and stage["status"] not in ("released", "final"):
+            return
+        already_published = stage["results_published_at"] is not None
         cfg = stage["config"] or {}
         weights = (
             (stage["event_config"] or {})
@@ -581,6 +587,16 @@ def release_feedback(payload: dict) -> None:
                 .all()
             )
             for r in rejects:
+                prior_penalty = session.execute(
+                    text(
+                        "SELECT 1 FROM app.score_ledger_entries WHERE stage_id = CAST(:s AS uuid) "
+                        "AND team_id = CAST(:t AS uuid) AND component = 'penalty' "
+                        "AND reason_code = 'INVALID_REPORT_PENALTY' LIMIT 1"
+                    ),
+                    {"s": stage_id, "t": str(r["team_id"])},
+                ).first()
+                if prior_penalty is not None:
+                    continue  # at-least-once jobs and evaluate->release must not charge twice
                 penalty_each = severity_points["low"] * float(penalty_cfg.get("fp_factor", 0.25))
                 cap = _stage_max_points(session, stage_id) * float(penalty_cfg.get("cap_fraction", 0.2))
                 penalty_total = min(penalty_each * int(r["n"]), cap)
@@ -598,11 +614,22 @@ def release_feedback(payload: dict) -> None:
                         note=f"{int(r['n'])} invalid report(s), capped at {cap:.1f}",
                     )
 
-        # 3. publish feedback
-        session.execute(
-            text("UPDATE app.submissions SET feedback_released = true WHERE stage_id = CAST(:s AS uuid)"),
-            {"s": stage_id},
-        )
+        # 3. Publish only after the explicit organizer release. This marker,
+        # feedback flags, and leaderboard job are committed in the same DB
+        # transaction so readers never observe a half-published result set.
+        if publish and not already_published:
+            session.execute(
+                text("UPDATE app.submissions SET feedback_released = true WHERE stage_id = CAST(:s AS uuid)"),
+                {"s": stage_id},
+            )
+            session.execute(
+                text(
+                    "UPDATE app.stages SET results_published_at = COALESCE(results_published_at, now()) "
+                    "WHERE id = CAST(:s AS uuid)"
+                ),
+                {"s": stage_id},
+            )
+            jobs.enqueue(session, "refresh_leaderboard", {"stage_id": stage_id, "visibility": "public"})
 
 
 def _stage_max_points(session, stage_id: str) -> float:
