@@ -721,8 +721,7 @@ def team_score(p: Principal = Depends(get_principal)):
         member["event_status"] in ("closed", "finalized")
         and bool(stages)
         and all(
-            stage["status"] in ("released", "final") and stage["results_published_at"] is not None
-            for stage in stages
+            stage["status"] in ("released", "final") and stage["results_published_at"] is not None for stage in stages
         )
     )
     return {
