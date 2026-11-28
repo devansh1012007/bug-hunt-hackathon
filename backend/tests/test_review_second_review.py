@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import text
-
 from conftest import STAFF_PW, login, participant_client
+from sqlalchemy import text
 
 
 def test_needs_second_review_creates_independent_review_task(client):
     """A second-review request creates real work and forbids the first reviewer from self-review."""
-    from fastapi.testclient import TestClient
-
     from app.db import app_session
+    from fastapi.testclient import TestClient
 
     participant = participant_client(client, "p1.team1@example.com")
     stage_id = participant._stage_id
