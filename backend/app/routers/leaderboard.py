@@ -23,7 +23,9 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
     with app_session() as s:
         stage = (
             s.execute(
-                text("SELECT id, event_id, config, status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
+                text(
+                    "SELECT id, event_id, config, status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"
+                ),
                 {"s": stage_id},
             )
             .mappings()
@@ -90,10 +92,7 @@ def my_results(stage_id: str, p: Principal = Depends(get_principal)):
     with app_session() as s:
         stage = (
             s.execute(
-                text(
-                    "SELECT status, event_id, results_published_at FROM app.stages "
-                    "WHERE id = CAST(:s AS uuid)"
-                ),
+                text("SELECT status, event_id, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
                 {"s": stage_id},
             )
             .mappings()
