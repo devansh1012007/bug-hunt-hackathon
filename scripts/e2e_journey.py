@@ -189,23 +189,32 @@ def main() -> int:
     # --- 6. reviewer flow ------------------------------------------------------
     rev_token = login(c, "reviewer1@example.com", STAFF_PW)
     rc = httpx.Client(timeout=15, headers={"Authorization": f"Bearer {rev_token}"})
-    # the evaluation pipeline creates review work for the report (needs_review path)
+    # Both reports can produce review work. Release must not proceed while
+    # either submission has an unresolved review item.
+    expected_review_submissions = {receipt1["submission_id"], receipt5["submission_id"]}
     deadline = time.time() + 15
     queue = []
+    review_items = []
     while time.time() < deadline:
         queue = rc.get(f"{BASE}/v1/review/queue").json()["queue"]
-        if any(q["submission_id"] == receipt1["submission_id"] for q in queue):
+        review_items = [q for q in queue if q["submission_id"] in expected_review_submissions]
+        if any(q["submission_id"] == receipt1["submission_id"] for q in review_items):
             break
         time.sleep(1.5)
     check(
         "evaluation pipeline created review work",
-        any(q["submission_id"] == receipt1["submission_id"] for q in queue),
-        str(len(queue)),
+        any(q["submission_id"] == receipt1["submission_id"] for q in review_items),
+        str(len(review_items)),
     )
-    item = next((q for q in queue if q["submission_id"] == receipt1["submission_id"]), None)
-    if item:
-        rc.post(f"{BASE}/v1/review/items/{item['review_item_id']}/claim").raise_for_status()
-        r = rc.post(
+    decisions = []
+    for item in review_items:
+        claimed = rc.post(f"{BASE}/v1/review/items/{item['review_item_id']}/claim")
+        if claimed.status_code == 404:
+            continue  # another queue refresh removed a stale item
+        if claimed.status_code != 200:
+            decisions.append((item["review_item_id"], claimed.status_code, claimed.text[:160]))
+            continue
+        response = rc.post(
             f"{BASE}/v1/review/items/{item['review_item_id']}/decision",
             json={
                 "decision": "accept_full",
@@ -219,9 +228,12 @@ def main() -> int:
                 "notes": "verified against local repro",
             },
         )
-        check("reviewer records auditable decision", r.status_code == 200, r.text[:200])
-    else:
-        check("report auto-matched without review item", True)
+        decisions.append((item["review_item_id"], response.status_code, response.text[:160]))
+    check(
+        "all event-journey review items resolved",
+        all(status == 200 for _, status, _ in decisions),
+        str(decisions),
+    )
 
     # --- 7. organizer records functional test results (step-up) ---------------
     r = oc.post(f"{BASE}/v1/auth/step-up", json={"password": STAFF_PW})
