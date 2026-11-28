@@ -226,6 +226,7 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
     response = pc.get(f"/v1/leaderboard/{other_stage_id}")
     assert response.status_code == 404
 
+
 def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
     """Queued work blocks both the release API and its asynchronous publisher."""
     from app.db import app_session
@@ -247,7 +248,7 @@ def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
 
     with app_session() as s:
         s.execute(
-    text("UPDATE app.stages SET status='released', results_published_at=NULL WHERE id = CAST(:s AS uuid)"),
+            text("UPDATE app.stages SET status='released', results_published_at=NULL WHERE id = CAST(:s AS uuid)"),
             {"s": stage_id},
         )
         pending_job_id = enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": False})
