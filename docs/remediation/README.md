@@ -61,8 +61,8 @@ the deployed staging topology proves the same behavior.
 | Workstream | Status | Evidence |
 | --- | --- | --- |
 | WP0 canonical source inventory | **Partial** | 389 unique source records enumerated; companion canonical register missing |
-| PR-3 score release / score aggregation | **Implemented on remediation branch; CI in progress** | Publication marker, fail-closed queue/review barrier, post-publication mutation guards, step-up UI/API, score arithmetic and regression tests |
-| Review workflow | **Implemented; CI in progress** | Second-review decisions create an independent task transactionally; same reviewer is barred from claiming/deciding it |
+| PR-3 score release / score aggregation | **Implemented; exact-head CI passed** | Migration 0008, publication marker, fail-closed queue/review barrier, post-publication mutation guards, step-up UI/API, score arithmetic and regression tests; staging evidence remains outstanding |
+| Review workflow | **Implemented; exact-head CI passed** | Second-review decisions create an independent task transactionally; a different reviewer must complete the task |
 | PR-1 tenant/event scope | **Not started** | Current principal and global selectors still violate the invariant |
 | PR-2 process/credential isolation | **Not started** | Participant API process still imports privileged GT engine |
 | P1 owner decisions | **Open** | See `docs/KNOWN_GAPS_AND_OWNER_DECISIONS.md` and revised plan §3 |
@@ -95,5 +95,7 @@ The latest code review changes additionally:
 - create and enforce an independent second-review task;
 - update the end-to-end journey to resolve every review item before release.
 
-CI is required on the exact PR head. A green end-to-end journey alone does not
-close REM-001/REM-002 or establish deployed READY evidence.
+CI run #109 passed on exact PR head `cb7c509abe6fe92ebb0e9aec9a5374ef4d87684d`:
+backend pytest/coverage, 46-check E2E, Ruff/format, Bandit, dependency audit,
+frontend build/tests, docs hygiene and secret scan. These are CI results only;
+they do not close REM-001/REM-002 or establish deployed READY evidence.
