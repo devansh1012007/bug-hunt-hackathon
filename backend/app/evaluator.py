@@ -660,19 +660,18 @@ def release_feedback(payload: dict) -> None:
         # 3. Publish only after the explicit organizer release. This marker,
         # feedback flags, and leaderboard job are committed in the same DB
         # transaction so readers never observe a half-published result set.
-        if True:
-            session.execute(
-                text("UPDATE app.submissions SET feedback_released = true WHERE stage_id = CAST(:s AS uuid)"),
-                {"s": stage_id},
-            )
-            session.execute(
-                text(
-                    "UPDATE app.stages SET results_published_at = COALESCE(results_published_at, now()) "
-                    "WHERE id = CAST(:s AS uuid)"
-                ),
-                {"s": stage_id},
-            )
-            jobs.enqueue(session, "refresh_leaderboard", {"stage_id": stage_id, "visibility": "public"})
+        session.execute(
+            text("UPDATE app.submissions SET feedback_released = true WHERE stage_id = CAST(:s AS uuid)"),
+            {"s": stage_id},
+        )
+        session.execute(
+            text(
+                "UPDATE app.stages SET results_published_at = COALESCE(results_published_at, now()) "
+                "WHERE id = CAST(:s AS uuid)"
+            ),
+            {"s": stage_id},
+        )
+        jobs.enqueue(session, "refresh_leaderboard", {"stage_id": stage_id, "visibility": "public"})
 
 
 def _stage_max_points(session, stage_id: str) -> float:
