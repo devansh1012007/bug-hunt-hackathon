@@ -440,10 +440,7 @@ def release_results(stage_id: str, body: dict, request: Request, p: Principal = 
     with app_session() as s:
         st = (
             s.execute(
-                text(
-                    "SELECT status, results_published_at FROM app.stages "
-                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
-                ),
+text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
                 {"s": stage_id},
             )
             .mappings()
@@ -454,7 +451,9 @@ def release_results(stage_id: str, body: dict, request: Request, p: Principal = 
 
         if action == "evaluate":
             if st["status"] == "ended":
-                s.execute(text("UPDATE app.stages SET status='evaluating' WHERE id = CAST(:s AS uuid)"), {"s": stage_id})
+                s.execute(
+                    text("UPDATE app.stages SET status='evaluating' WHERE id = CAST(:s AS uuid)"), {"s": stage_id}
+                )
             elif st["status"] != "evaluating":
                 raise ApiError(
                     "VALIDATION_ERROR",
