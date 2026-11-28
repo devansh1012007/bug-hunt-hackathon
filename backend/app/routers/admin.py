@@ -432,7 +432,7 @@ def control_stage(stage_id: str, body: dict, request: Request, p: Principal = De
 
 
 @router.post("/admin/stages/{stage_id}/release")
-def release_results(stage_id: str, body: dict, request: Request, p: Principal = Depends(require_organizer)):
+def release_results(stage_id: str, body: dict, request: Request, p: Principal = Depends(step_up_verified)):
     """Evaluate submissions, then publish only after scoring and required review work is complete."""
     action = body.get("action", "release")
     reason = body.get("reason", "results release")
