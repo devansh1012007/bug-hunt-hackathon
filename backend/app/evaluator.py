@@ -469,16 +469,10 @@ def apply_test_results(payload: dict) -> None:
         sub = _submission(session, submission_id)
         if sub is None:
             return
-        stage = (
-            session.execute(
-                text(
-                    "SELECT status, results_published_at FROM app.stages "
-                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
-                ),
-                {"s": str(sub["stage_id"])},
-            )
-            .first()
-        )
+        stage = session.execute(
+            text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
+            {"s": str(sub["stage_id"])},
+        ).first()
         if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
             return
         if _has_component(session, submission_id, "functional_test"):
