@@ -212,17 +212,14 @@ def evaluate_submission(payload: dict) -> None:
 def create_review_item(payload: dict) -> None:
     submission_id = payload["submission_id"]
     with app_session() as session:
-        stage = (
-            session.execute(
-                text(
-                    "SELECT st.status, st.results_published_at FROM app.submissions sub "
-                    "JOIN app.stages st ON st.id = sub.stage_id "
-                    "WHERE sub.id = CAST(:sid AS uuid) FOR UPDATE OF st"
-                ),
-                {"sid": submission_id},
-            )
-            .first()
-        )
+        stage = session.execute(
+            text(
+                "SELECT st.status, st.results_published_at FROM app.submissions sub "
+                "JOIN app.stages st ON st.id = sub.stage_id "
+                "WHERE sub.id = CAST(:sid AS uuid) FOR UPDATE OF st"
+            ),
+            {"sid": submission_id},
+        ).first()
         if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
             return
         existing = session.execute(
@@ -379,16 +376,10 @@ def apply_review_outcome(payload: dict) -> None:
         sub = _submission(session, submission_id)
         if sub is None:
             return
-        stage = (
-            session.execute(
-                text(
-                    "SELECT status, results_published_at FROM app.stages "
-                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
-                ),
-                {"s": str(sub["stage_id"])},
-            )
-            .first()
-        )
+        stage = session.execute(
+            text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
+            {"s": str(sub["stage_id"])},
+        ).first()
         if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
             return
         review = (
