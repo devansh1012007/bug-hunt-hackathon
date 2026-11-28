@@ -99,10 +99,15 @@ one of them writes an audit entry.
 5. Verify audit chain health: Operations > Audit > Verify chain must report
    "Hash chain intact". A broken chain before doors is a stop-and-investigate
    condition.
-6. Confirm accounts and invites: participants appear under the event with
-   activated true; lost invites get reissued with `POST
-   /v1/admin/events/{event_id}/invites` (single use, 48 hour expiry; the raw
-   token is returned to the console for hand delivery or club email).
+6. Confirm account provisioning in Admin > Participants. An administrator
+   registers each participant with an email, name and team assignment. There
+   are no invite tokens, activation URLs or public activation endpoint. On
+   first sign-in, only a registered participant who already belongs to a team
+   may choose an initial password. Staff accounts are created through
+   `POST /v1/auth/register` with an administrator-assigned password and
+   step-up confirmation. Unknown emails, incorrect passwords, passwordless
+   staff and participants without team membership receive the same generic
+   invalid-credentials response.
 
 ## 4. Launch sequence (doors to first submission)
 
@@ -255,13 +260,13 @@ and pause only if the fallback also fails.
 Response order: preserve, then decide. 1) Note the time and the reporting
 team; the audit log and request ids are your friends. 2) Preserve evidence:
 exports (submissions, ledger) and the audit chain verify result. 3) Do not
-announce anything naming a team. 4) The organizers decide per the rules;
-account disqualification is applied by the platform admin directly on the
-account status (the login path then refuses the account with a
-contact-the-organizers message); record the decision and its reason in the
-audit trail. Note for the post-event retro: v1 has no dedicated
-disqualification endpoint, so treat this as a manual, witnessed, two-person
-operation.
+announce anything naming a team. 4) The organizers decide per the published
+rules. An administrator removes the participant from the event team through
+Admin > Participants and records the reason in the audit trail. Account
+lifecycle status is not used for disqualification; user rows remain for
+ledger/audit foreign keys. Removing the final team membership revokes the
+participant's sessions and prevents future sign-in. Do not edit user rows or
+score history directly.
 
 ### 7.6 Report cap or cooldown complaints
 
@@ -270,37 +275,51 @@ per round, 20 second cooldown) and visible to participants in `/v1/config`;
 explain rather than override. Real evaluation interference goes through the
 review queue, not cap changes.
 
-### 7.7 Lost invite or locked account
+### 7.7 First sign-in or forgotten password
 
-Reissue the invite (section 3 item 6). For a forgotten password mid-event,
-the reset flow creates a hashed, single-use, 30 minute token; v1 has no mail
-provider, so the token surfaces through the organizer console path and dev
-logs (see `backend/app/routers/auth.py`, reset request); deliver it
-personally and have the person change the password immediately. Password
-reset revokes all sessions and bumps the token version (ATH-03).
+There is no invite-reissue or public activation flow. A registered participant
+with an existing team membership and no password sets the initial password
+during sign-in. Staff accounts never use passwordless first-claim; their
+initial password is assigned by an administrator.
+
+For a forgotten password, an administrator uses Admin > Participants or the
+admin password-reset operation after step-up confirmation. The administrator
+assigns a new password; the reset revokes the user's sessions and increments
+the token version. Deliver the new password through an organization-approved
+authenticated one-to-one channel, never by email, event chat or team chat.
+Unknown emails, passwordless staff and unassigned participants are not
+repaired by creating public tokens; verify registration and team membership
+through the admin roster.
 
 ## 8. Finalize sequence (end to release)
 
 1. Stage `end` at the deadline (or after the last extension). Confirm the
    ended status chip.
 2. Evaluate: Release row, Evaluate button. `POST /v1/admin/stages/{stage_id}/release`
-   with `{"action": "evaluate"}`. Stage moves to evaluating and the
-   release_feedback job is queued.
-3. Record functional test results while evaluating: Challenge tools >
+   with `{"action": "evaluate"}`. This moves the stage to evaluating. Each
+   submission's evaluation job was enqueued when that submission was accepted;
+   the worker continues draining those jobs. This action does not apply
+   release-default review points or penalties.
+3. Record functional test results while ended/evaluating: Challenge tools >
    Ground-truth test results (step-up required), one submission at a time
    (`submission_id`, tests_passed, tests_total). Each recording enqueues the
-   functional_test ledger application (ADR-019). This is the step that feeds
-   the 50 percent component.
-4. Clear the review backlog: every open review item needs a decision before
-   release, because release applies the default review quality (0.8,
-   RELEASE_DEFAULT, disputable) to any accepted report that lacks a reviewer
-   score. Decide, do not leave money on the table by accident.
+   functional_test ledger application (ADR-019). It must be accepted before
+   result publication.
+4. Clear required review work. Submissions in needs_review/in_review and
+   open review items other than optional auto-accept confirmation must be
+   resolved. Queued, running or dead-lettered scoring jobs also block release.
+   Recover or replay failed jobs; do not treat a dead-letter as completed.
 5. Release: Release row, Release results button, `{"action": "release"}`.
-   Stage moves to released; release_feedback runs (penalties capped at 20
-   percent of stage max, feedback_released set true for the stage) and the
-   leaderboard refreshes with public visibility. Participants now see real
-   statuses, matched bug codes, points, the Results breakdown, and the
-   leaderboard snapshot.
+   The API refuses publication while scoring jobs or required reviews remain.
+   The stage enters released, but participant data stays hidden until the
+   release worker applies default review quality (0.8, RELEASE_DEFAULT,
+   disputable) where needed, applies capped penalties, sets
+   `feedback_released` and `results_published_at`, and queues a fresh public
+   leaderboard snapshot in one transaction. Pre-publication snapshots are
+   not served as final results. Participants see scores only after the
+   publication marker commits and a post-publication snapshot is available.
+   If the release worker fails, repair/replay the job or retry Release after
+   blockers clear; do not manually set the publication marker.
 6. The released to final transition exists in the stage state model; there is
    no operator button for it in v1, so released is the resting state after
    publication.
@@ -349,5 +368,7 @@ reset revokes all sessions and bumps the token version (ATH-03).
 | Exports | GET /v1/admin/events/{id}/export/{results,submissions,ledger} |
 | Disputes | GET /v1/admin/disputes, POST /v1/admin/disputes/{id}/resolve |
 | Manual adjustment | POST /v1/admin/adjustments (admin role) |
-| Invites | POST /v1/admin/events/{id}/invites |
+| Staff registration | POST /v1/auth/register (admin + step-up; administrator-assigned password) |
+| Participant registration | POST /v1/admin/events/{id}/participants (admin + step-up; team assignment) |
+| Participant password reset | POST /v1/admin/users/{id}/password-reset (admin + step-up) |
 | Test results | POST /v1/admin/challenges/{id}/ground-truth/test-results (step-up) |
