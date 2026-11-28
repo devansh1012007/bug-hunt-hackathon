@@ -228,11 +228,10 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
 
 def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
     """Queued work blocks both the release API and its asynchronous publisher."""
-    from fastapi.testclient import TestClient
-
     from app.db import app_session
     from app.evaluator import release_feedback
     from app.jobs import enqueue
+    from fastapi.testclient import TestClient
 
     pc = participant_client(client, "p1.team1@example.com")
     stage_id = pc._stage_id
