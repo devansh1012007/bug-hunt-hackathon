@@ -117,6 +117,15 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
     visible_board = pc.get(f"/v1/leaderboard/{stage_id}")
     assert visible_board.status_code == 200
     assert visible_board.json()["visible"] is True
+    # The pre-publication public snapshot must not be mistaken for a final
+    # result. Publication is visible before the new snapshot job completes.
+    assert visible_board.json()["snapshot"] is None
+
+    worker_drain()
+    refreshed_board = pc.get(f"/v1/leaderboard/{stage_id}")
+    assert refreshed_board.status_code == 200
+    assert refreshed_board.json()["visible"] is True
+    assert refreshed_board.json()["snapshot"] is not None
 
 
 def test_participant_total_counts_penalty_once(client):
