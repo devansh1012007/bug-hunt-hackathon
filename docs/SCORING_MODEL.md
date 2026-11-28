@@ -89,6 +89,9 @@ Participant display distinguishes cumulative points from evaluation score.
 Points are the sum of all ledger entries, including CTF bonuses, penalties and
 adjustments. A level's score is the sum of its non-CTF ledger entries and is
 displayed as `score / max_points` only when `evaluation_status` is `complete`.
+Before explicit organizer publication, participant APIs return no score
+components or totals and the dashboard shows `Not released`; internal ledger
+entries do not become visible merely because evaluation has finished.
 `max_points` is a participant-safe ceiling stored in the app stage config; the
 participant API never reads ground truth to obtain it. The development seed
 uses 275 for each level because every fixture bug can be claimed once per
@@ -124,9 +127,11 @@ The evaluator's decision paths (deterministic matcher, then evaluator jobs):
   points; not invalid; no penalty.
 - Reviewer decisions from the queue (accept_full, accept_partial, duplicate,
   reject_invalid, unplanned_valid, needs_second_review) map to submission
-  statuses and ledger effects as above; needs_second_review returns the
-  submission to in_review and closes the item (a second item is not
-  auto-created in v1; flag it to the organizers).
+  statuses and ledger effects as above. A needs_second_review decision closes
+  the first item, keeps the submission in_review, and creates a new open
+  second-review item in the same transaction. The first reviewer cannot claim
+  or decide that item; a different reviewer must record a terminal decision
+  before the release barrier can pass.
 
 ## 4. CTF bonus and caps
 
