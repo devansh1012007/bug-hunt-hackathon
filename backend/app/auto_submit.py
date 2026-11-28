@@ -178,7 +178,7 @@ def _auto_submit_one(member: dict, user_id: str, level_no: int, stage: dict) -> 
         ).first()
         stage_state = (
             s.execute(
-text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
+                text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
                 {"s": str(stage["id"])},
             )
             .mappings()
