@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from conftest import login, participant_client, worker_drain
+from conftest import STAFF_PW, login, participant_client, worker_drain
 from sqlalchemy import text
 
 
@@ -239,6 +239,12 @@ def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
     token = login(client, "organizer@example.com")["access_token"]
     organizer = TestClient(client.app)
     organizer.headers.update({"Authorization": f"Bearer {token}"})
+
+    no_step_up = organizer.post(f"/v1/admin/stages/{stage_id}/release", json={"action": "release"})
+    assert no_step_up.status_code == 403
+    assert no_step_up.json()["error"]["code"] == "ADMIN_STEP_UP_REQUIRED"
+    step_up = organizer.post("/v1/auth/step-up", json={"password": STAFF_PW})
+    assert step_up.status_code == 200, step_up.text
 
     with app_session() as s:
         s.execute(
