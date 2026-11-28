@@ -1454,10 +1454,10 @@ def record_test_results(challenge_id: str, body: dict, request: Request, p: Prin
                 "VALIDATION_ERROR",
                 details={"tests": "Functional-test results cannot be added after publication."},
             )
-        if stage["status"] not in ("ended", "evaluating"):
+        if stage["status"] not in ("active", "paused", "ended", "evaluating"):
             raise ApiError(
                 "VALIDATION_ERROR",
-                details={"tests": "Functional-test results can be recorded only after the stage ends."},
+                details={"tests": "Functional-test results can be recorded only during or after an active stage."},
             )
         enqueue(
             s,
