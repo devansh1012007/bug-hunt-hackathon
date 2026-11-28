@@ -254,11 +254,13 @@ function PointsCard({
             const result = pointsByLevel.get(level.level_no)
             const maxPoints = result?.max_points ?? level.max_points
             const value =
-              result?.evaluation_status !== 'complete'
-                ? 'Evaluating'
-                : maxPoints === null
-                  ? fmtPoints(result.score)
-                  : `${fmtPoints(result.score)} / ${fmtPoints(maxPoints)}`
+              result?.evaluation_status === 'not_released'
+                ? 'Not released'
+                : result?.evaluation_status !== 'complete'
+                  ? 'Evaluating'
+                  : maxPoints === null
+                    ? fmtPoints(result.score)
+                    : `${fmtPoints(result.score)} / ${fmtPoints(maxPoints)}`
             return (
               <div key={level.level_no} className="kv-row">
                 <span className="kv-key">L{level.level_no}</span>
