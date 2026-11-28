@@ -146,10 +146,7 @@ def test_team_points_show_completed_level_score_and_cumulative_points(client):
             )
         # Simulate the organizer's explicit publication after all ledger writes.
         s.execute(
-            text(
-                "UPDATE app.stages SET status='released', results_published_at=now() "
-                "WHERE id = CAST(:stage AS uuid)"
-            ),
+text("UPDATE app.stages SET status='released', results_published_at=now() WHERE id = CAST(:stage AS uuid)"),
             {"stage": str(ids[3])},
         )
 
