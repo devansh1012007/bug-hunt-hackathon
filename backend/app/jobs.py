@@ -40,6 +40,11 @@ def stage_release_blockers(session: Session, stage_id: str) -> dict[str, int]:
                 "   AND EXISTS (SELECT 1 FROM app.submissions s "
                 "               WHERE s.id::text = j.payload ->> 'submission_id' "
                 "                 AND s.stage_id = CAST(:s AS uuid))) "
+                "  OR (j.kind = 'create_review_item' "
+                "      AND COALESCE(j.payload ->> 'reason', '') <> 'auto_accept_confirm' "
+                "      AND EXISTS (SELECT 1 FROM app.submissions s "
+                "                  WHERE s.id::text = j.payload ->> 'submission_id' "
+                "                    AND s.stage_id = CAST(:s AS uuid))) "
                 "  OR (j.kind = 'release_feedback' "
                 "      AND j.payload ->> 'stage_id' = :stage_id "
                 "      AND COALESCE(j.payload ->> 'publish', 'false') <> 'true')"
@@ -77,6 +82,7 @@ def stage_release_blockers(session: Session, stage_id: str) -> dict[str, int]:
 
 def _release_is_blocked(blockers: dict[str, int]) -> bool:
     return any(blockers.values())
+
 
 def enqueue(session: Session, kind: str, payload: dict, *, max_attempts: int = 5) -> str:
     job_id = str(uuid7())
