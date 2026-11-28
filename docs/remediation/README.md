@@ -61,7 +61,8 @@ the deployed staging topology proves the same behavior.
 | Workstream | Status | Evidence |
 | --- | --- | --- |
 | WP0 canonical source inventory | **Partial** | 389 unique source records enumerated; companion canonical register missing |
-| PR-3 score release / score aggregation | **Implementation drafted in this branch** | Publication marker migration, API gates, job semantics and regression tests added; CI/runtime execution still required |
+| PR-3 score release / score aggregation | **Implemented on remediation branch; CI in progress** | Publication marker, fail-closed queue/review barrier, post-publication mutation guards, step-up UI/API, score arithmetic and regression tests |
+| Review workflow | **Implemented; CI in progress** | Second-review decisions create an independent task transactionally; same reviewer is barred from claiming/deciding it |
 | PR-1 tenant/event scope | **Not started** | Current principal and global selectors still violate the invariant |
 | PR-2 process/credential isolation | **Not started** | Participant API process still imports privileged GT engine |
 | P1 owner decisions | **Open** | See `docs/KNOWN_GAPS_AND_OWNER_DECISIONS.md` and revised plan §3 |
@@ -76,3 +77,23 @@ A source record is not closed by a code edit alone. Closure requires:
 5. staging/deployment evidence for runtime/security boundaries.
 
 No READY claim is made by this register.
+
+
+## 5. PR review preservation and verification
+
+The PR review was performed using the repository's `code-review` skill. The
+branch is based on current `main` and is not behind it; no merge conflict
+resolution was required. Authentication/sign-in implementation and migrations
+0005, 0006 and 0007 were intentionally left untouched. The admin-managed
+participant/staff account policy on `main` remains authoritative.
+
+The latest code review changes additionally:
+- require recent step-up for Evaluate and Release;
+- block publication while queued, running or dead scoring jobs and unresolved
+  review work remain;
+- serialize reviewer/test-result/auto-submit writes against publication;
+- create and enforce an independent second-review task;
+- update the end-to-end journey to resolve every review item before release.
+
+CI is required on the exact PR head. A green end-to-end journey alone does not
+close REM-001/REM-002 or establish deployed READY evidence.
