@@ -43,6 +43,43 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
                 "payload": '{"stage_id":"redacted-test","event_id":"redacted-test","rows":[{"rank":1,"score":999}]}',
             },
         )
+        team = s.execute(
+            text(
+                "SELECT tm.team_id, e.tenant_id FROM app.team_members tm "
+                "JOIN app.teams t ON t.id = tm.team_id JOIN app.events e ON e.id = t.event_id "
+                "WHERE tm.user_id = (SELECT id FROM app.users WHERE email = 'p1.team1@example.com') "
+                "AND e.id = CAST(:e AS uuid) LIMIT 1"
+            ),
+            {"e": str(event_id)},
+        ).one()
+        hidden_stage_id = str(uuid.uuid4())
+        s.execute(
+            text(
+                "INSERT INTO app.stages (id, event_id, name, kind, ordinal, status, config) "
+                "VALUES (CAST(:id AS uuid), CAST(:e AS uuid), 'Hidden score fixture', 'level', 99, "
+                "'ended', CAST(:config AS jsonb))"
+            ),
+            {
+                "id": hidden_stage_id,
+                "e": str(event_id),
+                "config": '{"max_points":1000}',
+            },
+        )
+        s.execute(
+            text(
+                "INSERT INTO app.score_ledger_entries "
+                "(id, tenant_id, event_id, stage_id, team_id, component, kind, points, reason_code) "
+                "VALUES (CAST(:id AS uuid), CAST(:tenant AS uuid), CAST(:event AS uuid), "
+                "CAST(:stage AS uuid), CAST(:team AS uuid), 'functional_test', 'award', 999, 'HIDDEN_FIXTURE')"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant": str(team["tenant_id"]),
+                "event": str(event_id),
+                "stage": hidden_stage_id,
+                "team": str(team["team_id"]),
+            },
+        )
 
     release_feedback({"stage_id": stage_id, "publish": False})
 
@@ -53,6 +90,14 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
     hidden_results = pc.get(f"/v1/results/{stage_id}")
     assert hidden_results.status_code == 200
     assert hidden_results.json()["released"] is False
+
+    # The separate dashboard endpoint must not expose raw score components.
+    hidden_team_score = pc.get("/v1/team/score")
+    assert hidden_team_score.status_code == 200
+    hidden_level = next(level for level in hidden_team_score.json()["levels"] if level["level_no"] == 99)
+    assert hidden_level["evaluation_status"] == "not_released"
+    assert hidden_level["components"] == {}
+    assert hidden_level["score"] == 0.0
 
     # Simulate the organizer's explicit release transition, then run its job.
     with app_session() as s:
