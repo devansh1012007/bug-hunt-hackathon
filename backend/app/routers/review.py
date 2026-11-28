@@ -68,7 +68,11 @@ def claim_item(item_id: str, p: Principal = Depends(require_staff())):
         row = (
             s.execute(
                 text(
-                    "SELECT id, status, claimed_by, claimed_at FROM app.review_items WHERE id = CAST(:i AS uuid) FOR UPDATE"
+                    "SELECT ri.id, ri.status, ri.claimed_by, ri.claimed_at, "
+                    "st.status AS stage_status, st.results_published_at "
+                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id "
+                    "JOIN app.stages st ON st.id = s.stage_id "
+                    "WHERE ri.id = CAST(:i AS uuid) FOR UPDATE OF ri, st"
                 ),
                 {"i": item_id},
             )
