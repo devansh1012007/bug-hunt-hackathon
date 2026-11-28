@@ -25,7 +25,7 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
         s.execute(
             text(
                 "UPDATE app.stages SET status='evaluating', "
-                "config=jsonb_set(config, '{leaderboard_mode}', '\"live\"'::jsonb, true), "
+                "config=jsonb_set(config, '{leaderboard_mode}', to_jsonb('live'::text), true), '{leaderboard_mode}', '\"live\"'::jsonb, true), "
                 "results_published_at=NULL WHERE id = CAST(:s AS uuid)"
             ),
             {"s": stage_id},

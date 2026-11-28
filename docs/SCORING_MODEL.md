@@ -187,10 +187,10 @@ participant requests, every mode is additionally gated by the
 `results_published_at` marker, which is committed only after the explicit
 organizer release job has finished writing the ledger and feedback flags.
 This prevents `live` or `frozen` from becoming a pre-release score bypass.
-After publication, hidden continues to block the participant board, frozen
-serves snapshots delayed by `leaderboard_delay_s` (600 seconds), and live
-serves the newest snapshot. The release job enqueues the public snapshot in
-the same transaction that records publication completion.
+After publication, the hidden mode stops the pre-release live view,
+frozen serves snapshots delayed by `leaderboard_delay_s` (600 seconds), and
+live serves the newest snapshot. The release job enqueues the public snapshot
+in the same transaction that records publication completion.
 
 ## 7. What is configurable, and when it freezes
 

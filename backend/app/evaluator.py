@@ -501,7 +501,7 @@ def release_feedback(payload: dict) -> None:
         stage = (
             session.execute(
                 text(
-                    "SELECT st.id, st.status, st.config, st.results_published_at, e.id AS event_id, e.tenant_id, e.config AS event_config FROM app.stages st JOIN app.events e ON e.id = st.event_id WHERE st.id = CAST(:s AS uuid)"
+                    "SELECT st.id, st.status, st.config, st.results_published_at, e.id AS event_id, e.tenant_id, e.config AS event_config FROM app.stages st JOIN app.events e ON e.id = st.event_id WHERE st.id = CAST(:s AS uuid) FOR UPDATE OF st"
                 ),
                 {"s": stage_id},
             )
