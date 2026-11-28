@@ -51,7 +51,7 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
                 "AND e.id = CAST(:e AS uuid) LIMIT 1"
             ),
             {"e": str(event_id)},
-        ).one()
+        ).mappings().one()
         hidden_stage_id = str(uuid.uuid4())
         s.execute(
             text(
