@@ -19,17 +19,21 @@ def test_needs_second_review_creates_independent_review_task(client):
     first_item_id = str(uuid.uuid4())
 
     with app_session() as s:
-        context = s.execute(
-            text(
-                "SELECT u.id AS author_id, tm.team_id, t.event_id, e.tenant_id, cv.id AS challenge_version_id "
-                "FROM app.users u "
-                "JOIN app.team_members tm ON tm.user_id = u.id "
-                "JOIN app.teams t ON t.id = tm.team_id "
-                "JOIN app.events e ON e.id = t.event_id "
-                "JOIN app.challenge_versions cv ON cv.event_id = e.id "
-                "WHERE u.email = 'p1.team1@example.com' LIMIT 1"
+        context = (
+            s.execute(
+                text(
+                    "SELECT u.id AS author_id, tm.team_id, t.event_id, e.tenant_id, cv.id AS challenge_version_id "
+                    "FROM app.users u "
+                    "JOIN app.team_members tm ON tm.user_id = u.id "
+                    "JOIN app.teams t ON t.id = tm.team_id "
+                    "JOIN app.events e ON e.id = t.event_id "
+                    "JOIN app.challenge_versions cv ON cv.event_id = e.id "
+                    "WHERE u.email = 'p1.team1@example.com' LIMIT 1"
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         s.execute(
             text(
                 "INSERT INTO app.submissions "
@@ -126,8 +130,7 @@ def test_needs_second_review_creates_independent_review_task(client):
         ).scalar_one()
         open_items = s.execute(
             text(
-                "SELECT count(*) FROM app.review_items "
-                "WHERE submission_id = CAST(:id AS uuid) AND status <> 'decided'"
+                "SELECT count(*) FROM app.review_items WHERE submission_id = CAST(:id AS uuid) AND status <> 'decided'"
             ),
             {"id": submission_id},
         ).scalar_one()
