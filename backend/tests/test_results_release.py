@@ -218,10 +218,11 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
     assert response.status_code == 404
 
 def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
-    """A queued pre-release job blocks publication; retry succeeds after it finishes."""
+    """Queued work blocks both the release API and its asynchronous publisher."""
     from fastapi.testclient import TestClient
 
     from app.db import app_session
+    from app.evaluator import release_feedback
     from app.jobs import enqueue
 
     pc = participant_client(client, "p1.team1@example.com")
@@ -233,12 +234,21 @@ def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
     with app_session() as s:
         s.execute(
             text(
-                "UPDATE app.stages SET status='evaluating', results_published_at=NULL "
+                "UPDATE app.stages SET status='released', results_published_at=NULL "
                 "WHERE id = CAST(:s AS uuid)"
             ),
             {"s": stage_id},
         )
         pending_job_id = enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": False})
+
+    # Defense in depth: even if a stale deployment already changed stage
+    # status, the worker must not publish while the earlier scoring pass exists.
+    try:
+        release_feedback({"stage_id": stage_id, "publish": True})
+    except RuntimeError as exc:
+        assert "unfinished work" in str(exc)
+    else:
+        raise AssertionError("release worker published while a prerequisite job was queued")
 
     blocked = organizer.post(f"/v1/admin/stages/{stage_id}/release", json={"action": "release"})
     assert blocked.status_code == 422, blocked.text
