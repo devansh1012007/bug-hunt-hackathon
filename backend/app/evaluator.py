@@ -212,6 +212,19 @@ def evaluate_submission(payload: dict) -> None:
 def create_review_item(payload: dict) -> None:
     submission_id = payload["submission_id"]
     with app_session() as session:
+        stage = (
+            session.execute(
+                text(
+                    "SELECT st.status, st.results_published_at FROM app.submissions sub "
+                    "JOIN app.stages st ON st.id = sub.stage_id "
+                    "WHERE sub.id = CAST(:sid AS uuid) FOR UPDATE OF st"
+                ),
+                {"sid": submission_id},
+            )
+            .first()
+        )
+        if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
+            return
         existing = session.execute(
             text("SELECT 1 FROM app.review_items WHERE submission_id = CAST(:sid AS uuid) AND status <> 'decided'"),
             {"sid": submission_id},
@@ -366,6 +379,18 @@ def apply_review_outcome(payload: dict) -> None:
         sub = _submission(session, submission_id)
         if sub is None:
             return
+        stage = (
+            session.execute(
+                text(
+                    "SELECT status, results_published_at FROM app.stages "
+                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
+                ),
+                {"s": str(sub["stage_id"])},
+            )
+            .first()
+        )
+        if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
+            return
         review = (
             session.execute(
                 text("SELECT decision, rubric, quality FROM app.reviews WHERE id = CAST(:r AS uuid)"), {"r": review_id}
@@ -450,11 +475,23 @@ def apply_test_results(payload: dict) -> None:
     submission_id = payload["submission_id"]
     passed, total = int(payload["tests_passed"]), int(payload["tests_total"])
     with app_session() as session:
-        if _has_component(session, submission_id, "functional_test"):
-            return  # idempotent
         sub = _submission(session, submission_id)
         if sub is None:
             return
+        stage = (
+            session.execute(
+                text(
+                    "SELECT status, results_published_at FROM app.stages "
+                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
+                ),
+                {"s": str(sub["stage_id"])},
+            )
+            .first()
+        )
+        if stage is None or stage[0] in ("released", "final") or stage[1] is not None:
+            return
+        if _has_component(session, submission_id, "functional_test"):
+            return  # idempotent
         claim = session.execute(
             text("SELECT award_unit_id FROM app.award_claims WHERE submission_id = CAST(:sid AS uuid) LIMIT 1"),
             {"sid": submission_id},
@@ -510,12 +547,18 @@ def release_feedback(payload: dict) -> None:
         )
         if stage is None:
             return
-        publish = bool(payload.get("publish", False))
-        # A stale or forged queue payload cannot publish while the stage is
-        # still evaluating. The organizer transition is the release authority.
-        if publish and stage["status"] not in ("released", "final"):
+        # Evaluation is performed by the per-submission jobs. This handler is
+        # only the final publisher; it must never apply release defaults or
+        # penalties during the earlier EVALUATING phase.
+        if payload.get("publish") is not True:
             return
-        already_published = stage["results_published_at"] is not None
+        if stage["status"] not in ("released", "final"):
+            return
+        if stage["results_published_at"] is not None:
+            return
+        blockers = jobs.stage_release_blockers(session, stage_id)
+        if any(blockers.values()):
+            raise RuntimeError(f"stage release blocked by unfinished work: {blockers}")
         cfg = stage["config"] or {}
         weights = (
             (stage["event_config"] or {})
@@ -617,7 +660,7 @@ def release_feedback(payload: dict) -> None:
         # 3. Publish only after the explicit organizer release. This marker,
         # feedback flags, and leaderboard job are committed in the same DB
         # transaction so readers never observe a half-published result set.
-        if publish and not already_published:
+        if True:
             session.execute(
                 text("UPDATE app.submissions SET feedback_released = true WHERE stage_id = CAST(:s AS uuid)"),
                 {"s": stage_id},
