@@ -136,3 +136,41 @@ def test_participant_total_counts_penalty_once(client):
     assert payload["total"] == 80.0
     assert payload["penalties"] == -20.0
     assert payload["by_component"]["penalty"] == -20.0
+
+
+def test_participant_cannot_read_another_events_published_leaderboard(client):
+    """A leaked/guessed stage UUID must not bypass event membership."""
+    from app.db import app_session
+
+    pc = participant_client(client, "p1.team1@example.com")
+    other_event_id = str(uuid.uuid4())
+    other_stage_id = str(uuid.uuid4())
+
+    with app_session() as s:
+        tenant_id = s.execute(
+            text("SELECT tenant_id FROM app.users WHERE email = 'p1.team1@example.com'")
+        ).scalar_one()
+        s.execute(
+            text(
+                "INSERT INTO app.events (id, tenant_id, slug, name, timezone, status) "
+                "VALUES (CAST(:id AS uuid), CAST(:tenant AS uuid), :slug, 'Isolated event', "
+                "'Asia/Kolkata', 'live')"
+            ),
+            {"id": other_event_id, "tenant": str(tenant_id), "slug": f"isolated-{uuid.uuid4().hex[:12]}"},
+        )
+        s.execute(
+            text(
+                "INSERT INTO app.stages (id, event_id, name, kind, ordinal, status, config, results_published_at) "
+                "VALUES (CAST(:id AS uuid), CAST(:event AS uuid), 'Published stage', 'main', 1, "
+                "'released', CAST(:config AS jsonb), now())"
+            ),
+            {
+                "id": other_stage_id,
+                "event": other_event_id,
+                "config": '{"leaderboard_mode":"live"}',
+            },
+        )
+
+    response = pc.get(f"/v1/leaderboard/{other_stage_id}")
+    assert response.status_code == 404
+
