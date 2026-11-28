@@ -176,7 +176,23 @@ def _auto_submit_one(member: dict, user_id: str, level_no: int, stage: dict) -> 
             text("SELECT challenge_version_id FROM app.team_repo_choices WHERE team_id = CAST(:t AS uuid)"),
             {"t": str(member["team_id"])},
         ).first()
-        s.execute(text("SELECT id FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"), {"s": str(stage["id"])})
+        stage_state = (
+            s.execute(
+                text(
+                    "SELECT status, results_published_at FROM app.stages "
+                    "WHERE id = CAST(:s AS uuid) FOR UPDATE"
+                ),
+                {"s": str(stage["id"])},
+            )
+            .mappings()
+            .first()
+        )
+        if (
+            stage_state is None
+            or stage_state["status"] not in ("active", "paused")
+            or stage_state["results_published_at"] is not None
+        ):
+            return None
         now = s.execute(text("SELECT clock_timestamp()")).scalar_one()
         cfg = stage["config"] or {}
         if choice is None:
