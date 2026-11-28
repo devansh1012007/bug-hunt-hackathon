@@ -82,7 +82,9 @@ def claim_item(item_id: str, p: Principal = Depends(require_staff())):
         if row is None:
             raise ApiError("NOT_FOUND")
         if row["stage_status"] in ("released", "final") or row["results_published_at"] is not None:
-            raise ApiError("VALIDATION_ERROR", details={"decision": "Results have already been published for this stage."})
+            raise ApiError(
+                "VALIDATION_ERROR", details={"decision": "Results have already been published for this stage."}
+            )
         if row["status"] == "decided":
             raise ApiError("VALIDATION_ERROR", details={"claim": "Item already decided."})
         if row["status"] == "claimed" and row["claimed_by"] is not None and str(row["claimed_by"]) != p.id:
