@@ -21,7 +21,6 @@ from .db import app_session, uuid7
 RETRY_BACKOFF_S = [10, 60, 300, 900]
 
 
-
 def stage_release_blockers(session: Session, stage_id: str) -> dict[str, int]:
     """Return work that must finish before participant feedback can be published.
 
