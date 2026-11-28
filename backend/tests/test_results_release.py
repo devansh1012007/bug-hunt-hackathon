@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from conftest import participant_client
+from conftest import login, participant_client, worker_drain
 from sqlalchemy import text
 
 
@@ -216,3 +216,61 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
 
     response = pc.get(f"/v1/leaderboard/{other_stage_id}")
     assert response.status_code == 404
+
+def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
+    """A queued pre-release job blocks publication; retry succeeds after it finishes."""
+    from fastapi.testclient import TestClient
+
+    from app.db import app_session
+    from app.jobs import enqueue
+
+    pc = participant_client(client, "p1.team1@example.com")
+    stage_id = pc._stage_id
+    token = login(client, "organizer@example.com")["access_token"]
+    organizer = TestClient(client.app)
+    organizer.headers.update({"Authorization": f"Bearer {token}"})
+
+    with app_session() as s:
+        s.execute(
+            text(
+                "UPDATE app.stages SET status='evaluating', results_published_at=NULL "
+                "WHERE id = CAST(:s AS uuid)"
+            ),
+            {"s": stage_id},
+        )
+        pending_job_id = enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": False})
+
+    blocked = organizer.post(f"/v1/admin/stages/{stage_id}/release", json={"action": "release"})
+    assert blocked.status_code == 422, blocked.text
+    blocker_details = blocked.json()["error"]["details"]["release_blocked"]
+    assert blocker_details["pending_scoring_jobs"] == 1
+
+    with app_session() as s:
+        s.execute(
+            text("UPDATE app.jobs SET status='done' WHERE id = CAST(:id AS uuid)"),
+            {"id": pending_job_id},
+        )
+
+    accepted = organizer.post(f"/v1/admin/stages/{stage_id}/release", json={"action": "release"})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["release_pending"] is True
+
+    with app_session() as s:
+        before_worker = s.execute(
+            text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
+            {"s": stage_id},
+        ).one()
+        assert before_worker[0] == "released"
+        assert before_worker[1] is None
+
+    worker_drain()
+
+    with app_session() as s:
+        after_worker = s.execute(
+            text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
+            {"s": stage_id},
+        ).one()
+        assert after_worker[0] == "released"
+        assert after_worker[1] is not None
+
+
