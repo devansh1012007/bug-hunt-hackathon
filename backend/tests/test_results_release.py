@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import text
-
 from conftest import participant_client
+from sqlalchemy import text
 
 
 def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
