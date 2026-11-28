@@ -77,6 +77,8 @@ def claim_item(item_id: str, p: Principal = Depends(require_staff())):
         )
         if row is None:
             raise ApiError("NOT_FOUND")
+        if row["stage_status"] in ("released", "final") or row["results_published_at"] is not None:
+            raise ApiError("VALIDATION_ERROR", details={"decision": "Results have already been published for this stage."})
         if row["status"] == "decided":
             raise ApiError("VALIDATION_ERROR", details={"claim": "Item already decided."})
         if row["status"] == "claimed" and row["claimed_by"] is not None and str(row["claimed_by"]) != p.id:
@@ -183,8 +185,11 @@ def record_decision(item_id: str, body: DecisionIn, request: Request, p: Princip
         row = (
             s.execute(
                 text(
-                    "SELECT ri.id, ri.status, ri.submission_id, ri.claimed_by, s.team_id, s.kind, s.challenge_version_id "
-                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id WHERE ri.id = CAST(:i AS uuid) FOR UPDATE"
+                    "SELECT ri.id, ri.status, ri.submission_id, ri.claimed_by, s.team_id, s.kind, s.challenge_version_id, "
+                    "st.status AS stage_status, st.results_published_at "
+                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id "
+                    "JOIN app.stages st ON st.id = s.stage_id "
+                    "WHERE ri.id = CAST(:i AS uuid) FOR UPDATE OF ri, st"
                 ),
                 {"i": item_id},
             )
