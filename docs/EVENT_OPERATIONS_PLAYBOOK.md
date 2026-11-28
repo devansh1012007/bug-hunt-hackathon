@@ -295,13 +295,17 @@ through the admin roster.
 
 1. Stage `end` at the deadline (or after the last extension). Confirm the
    ended status chip.
-2. Evaluate: Release row, Evaluate button. `POST /v1/admin/stages/{stage_id}/release`
-   with `{"action": "evaluate"}`. This moves the stage to evaluating. Each
-   submission's evaluation job was enqueued when that submission was accepted;
-   the worker continues draining those jobs. This action does not apply
-   release-default review points or penalties.
-3. Record functional test results while ended/evaluating: Challenge tools >
-   Ground-truth test results (step-up required), one submission at a time
+2. Evaluate: the organizer opens the Step-Up panel in Live Operations
+   and confirms their password. Recent step-up is required for both Evaluate
+   and Release. Then use Release row, Evaluate:
+   `POST /v1/admin/stages/{stage_id}/release` with `{"action": "evaluate"}`.
+   This moves the stage to evaluating. Each submission's evaluation job was
+   enqueued when that submission was accepted; the worker continues draining
+   those jobs. This action does not apply release-default review points or
+   penalties.
+3. Record functional test results while the stage is active, paused, ended or
+   evaluating, but never after publication: Challenge tools > Ground-truth
+   test results (step-up required), one submission at a time
    (`submission_id`, tests_passed, tests_total). Each recording enqueues the
    functional_test ledger application (ADR-019). It must be accepted before
    result publication.
@@ -309,7 +313,9 @@ through the admin roster.
    open review items other than optional auto-accept confirmation must be
    resolved. Queued, running or dead-lettered scoring jobs also block release.
    Recover or replay failed jobs; do not treat a dead-letter as completed.
-5. Release: Release row, Release results button, `{"action": "release"}`.
+5. Release: confirm the Step-Up panel still shows a recent
+   confirmation, then use Release row, Release results:
+   `POST /v1/admin/stages/{stage_id}/release` with `{"action": "release"}`.
    The API refuses publication while scoring jobs or required reviews remain.
    The stage enters released, but participant data stays hidden until the
    release worker applies default review quality (0.8, RELEASE_DEFAULT,
