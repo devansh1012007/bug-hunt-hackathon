@@ -247,10 +247,7 @@ def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
 
     with app_session() as s:
         s.execute(
-            text(
-                "UPDATE app.stages SET status='released', results_published_at=NULL "
-                "WHERE id = CAST(:s AS uuid)"
-            ),
+    text("UPDATE app.stages SET status='released', results_published_at=NULL WHERE id = CAST(:s AS uuid)"),
             {"s": stage_id},
         )
         pending_job_id = enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": False})
@@ -296,5 +293,3 @@ def test_release_waits_for_pending_scoring_work_and_retries_cleanly(client):
         ).one()
         assert after_worker[0] == "released"
         assert after_worker[1] is not None
-
-
