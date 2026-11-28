@@ -23,7 +23,7 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
     with app_session() as s:
         stage = (
             s.execute(
-                text("SELECT id, config, status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
+                text("SELECT id, event_id, config, status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid)"),
                 {"s": stage_id},
             )
             .mappings()
@@ -31,13 +31,28 @@ def leaderboard(stage_id: str, p: Principal = Depends(get_principal)):
         )
         if stage is None:
             raise ApiError("NOT_FOUND")
-        # Participant access is gated by completed publication, not by a
-        # configurable live/frozen mode. The mode controls presentation only
-        # after the organizer's release job has committed all score entries.
-        if p.role == "participant" and (
-            stage["status"] not in ("released", "final") or stage["results_published_at"] is None
-        ):
-            return {"visible": False, "message": "Results have not been released yet."}
+        # A published board is still event-private. A participant must
+        # belong to a team in this exact event and tenant before any snapshot
+        # is read. UUID secrecy is not authorization.
+        if p.role == "participant":
+            membership = s.execute(
+                text(
+                    "SELECT 1 FROM app.team_members tm "
+                    "JOIN app.teams t ON t.id = tm.team_id "
+                    "JOIN app.events e ON e.id = t.event_id "
+                    "JOIN app.users u ON u.id = tm.user_id "
+                    "WHERE tm.user_id = CAST(:u AS uuid) "
+                    "AND t.event_id = CAST(:e AS uuid) AND e.tenant_id = u.tenant_id "
+                    "LIMIT 1"
+                ),
+                {"u": p.id, "e": str(stage["event_id"])},
+            ).first()
+            if membership is None:
+                raise ApiError("NOT_FOUND")
+            # Publication completion, not a configurable live/frozen mode,
+            # controls when participant score data can be read.
+            if stage["status"] not in ("released", "final") or stage["results_published_at"] is None:
+                return {"visible": False, "message": "Results have not been released yet."}
         cfg = stage["config"] or {}
         mode = cfg.get("leaderboard_mode", "hidden")
         released = stage["status"] in ("released", "final")
@@ -93,7 +108,10 @@ def my_results(stage_id: str, p: Principal = Depends(get_principal)):
             text(
                 "SELECT tm.team_id FROM app.team_members tm "
                 "JOIN app.teams t ON t.id = tm.team_id "
+                "JOIN app.events e ON e.id = t.event_id "
+                "JOIN app.users u ON u.id = tm.user_id "
                 "WHERE tm.user_id = CAST(:u AS uuid) AND t.event_id = CAST(:e AS uuid) "
+                "AND e.tenant_id = u.tenant_id "
                 "ORDER BY tm.joined_at DESC LIMIT 1"
             ),
             {"u": p.id, "e": str(stage["event_id"])},
