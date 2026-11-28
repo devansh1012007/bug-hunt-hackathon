@@ -190,7 +190,22 @@ This prevents `live` or `frozen` from becoming a pre-release score bypass.
 After publication, the hidden mode stops the pre-release live view,
 frozen serves snapshots delayed by `leaderboard_delay_s` (600 seconds), and
 live serves the newest snapshot. The release job enqueues the public snapshot
-in the same transaction that records publication completion.
+in the same transaction that records publication completion. Snapshots created
+before `results_published_at` are excluded, so an old live snapshot cannot
+appear as the final result while the fresh post-publication snapshot is queued.
+
+The organizer's Evaluate action only advances the stage to `evaluating`;
+per-submission evaluation jobs were enqueued when submissions were accepted.
+Release is a separate barrier: queued, running, or dead scoring jobs, unresolved
+`needs_review`/`in_review` submissions, and required open review items block
+publication. Dead-lettered jobs remain blockers until an operator recovers or
+resolves them. The release worker repeats the check while holding the stage row
+lock. Reviewer decisions and organizer test-result writes take that same lock,
+and deadline auto-submit rechecks the stage status after acquiring it, so no
+new score-affecting work can slip in after the release check. Release defaults
+and penalties are applied only during explicit publication, not during
+evaluation. The publication marker, feedback flags, and enqueue of the fresh
+public leaderboard snapshot commit together.
 
 ## 7. What is configurable, and when it freezes
 
