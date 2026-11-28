@@ -43,15 +43,19 @@ def test_evaluation_does_not_publish_results_or_live_leaderboard(client):
                 "payload": '{"stage_id":"redacted-test","event_id":"redacted-test","rows":[{"rank":1,"score":999}]}',
             },
         )
-        team = s.execute(
-            text(
-                "SELECT tm.team_id, e.tenant_id FROM app.team_members tm "
-                "JOIN app.teams t ON t.id = tm.team_id JOIN app.events e ON e.id = t.event_id "
-                "WHERE tm.user_id = (SELECT id FROM app.users WHERE email = 'p1.team1@example.com') "
-                "AND e.id = CAST(:e AS uuid) LIMIT 1"
-            ),
-            {"e": str(event_id)},
-        ).mappings().one()
+        team = (
+            s.execute(
+                text(
+                    "SELECT tm.team_id, e.tenant_id FROM app.team_members tm "
+                    "JOIN app.teams t ON t.id = tm.team_id JOIN app.events e ON e.id = t.event_id "
+                    "WHERE tm.user_id = (SELECT id FROM app.users WHERE email = 'p1.team1@example.com') "
+                    "AND e.id = CAST(:e AS uuid) LIMIT 1"
+                ),
+                {"e": str(event_id)},
+            )
+            .mappings()
+            .one()
+        )
         hidden_stage_id = str(uuid.uuid4())
         s.execute(
             text(
