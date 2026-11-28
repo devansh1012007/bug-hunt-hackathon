@@ -70,10 +70,13 @@ def test_l2_multilocation_flag_matches_cross_file_bug(client):
         ).scalar_one()
         assert float(total) > 0
 
-    # the team score endpoint reflects the awarded level
+    # Internal ledger truth is not participant-visible before explicit release.
     score = p1.get("/v1/team/score").json()
-    assert score["total"] > 0
-    assert any(lvl["level_no"] == 2 for lvl in score["levels"])
+    assert score["total"] == 0
+    level_two = next(lvl for lvl in score["levels"] if lvl["level_no"] == 2)
+    assert level_two["evaluation_status"] == "not_released"
+    assert level_two["components"] == {}
+    assert level_two["score"] == 0.0
 
 
 def test_team_points_show_completed_level_score_and_cumulative_points(client):
@@ -89,19 +92,23 @@ def test_team_points_show_completed_level_score_and_cumulative_points(client):
     assert initial["points"] == 0
     assert initial["total"] == 0
     assert len(initial["levels"]) == 4
-    assert all(level["evaluation_status"] == "not_submitted" for level in initial["levels"])
+    assert all(level["evaluation_status"] == "not_released" for level in initial["levels"])
 
     lock_repo(pc).raise_for_status()
     enter_workspace(pc, 1).raise_for_status()
     submit_empty(pc, 1).raise_for_status()
 
     pending = pc.get("/v1/team/score").json()["levels"]
-    assert next(level for level in pending if level["level_no"] == 1)["evaluation_status"] == "evaluating"
+    pending_level = next(level for level in pending if level["level_no"] == 1)
+    assert pending_level["evaluation_status"] == "not_released"
+    assert pending_level["components"] == {}
+    assert pending_level["score"] == 0.0
 
     worker_drain()
     completed = pc.get("/v1/team/score").json()["levels"]
     level_one = next(level for level in completed if level["level_no"] == 1)
-    assert level_one["evaluation_status"] == "complete"
+    assert level_one["evaluation_status"] == "not_released"
+    assert level_one["components"] == {}
     assert level_one["score"] == 0
     assert level_one["max_points"] == 275
 
@@ -137,6 +144,14 @@ def test_team_points_show_completed_level_score_and_cumulative_points(client):
                 points=points,
                 reason_code="TEST_POINTS",
             )
+        # Simulate the organizer's explicit publication after all ledger writes.
+        s.execute(
+            text(
+                "UPDATE app.stages SET status='released', results_published_at=now() "
+                "WHERE id = CAST(:stage AS uuid)"
+            ),
+            {"stage": str(ids[3])},
+        )
 
     scored = pc.get("/v1/team/score").json()
     level_one = next(level for level in scored["levels"] if level["level_no"] == 1)
