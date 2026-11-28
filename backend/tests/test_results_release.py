@@ -121,10 +121,7 @@ def test_participant_total_counts_penalty_once(client):
                 },
             )
         s.execute(
-            text(
-                "UPDATE app.stages SET status='released', results_published_at=now() "
-                "WHERE id = CAST(:s AS uuid)"
-            ),
+            text("UPDATE app.stages SET status='released', results_published_at=now() WHERE id = CAST(:s AS uuid)"),
             {"s": stage_id},
         )
 
@@ -146,9 +143,7 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
     other_stage_id = str(uuid.uuid4())
 
     with app_session() as s:
-        tenant_id = s.execute(
-            text("SELECT tenant_id FROM app.users WHERE email = 'p1.team1@example.com'")
-        ).scalar_one()
+        tenant_id = s.execute(text("SELECT tenant_id FROM app.users WHERE email = 'p1.team1@example.com'")).scalar_one()
         s.execute(
             text(
                 "INSERT INTO app.events (id, tenant_id, slug, name, timezone, status) "
@@ -172,4 +167,3 @@ def test_participant_cannot_read_another_events_published_leaderboard(client):
 
     response = pc.get(f"/v1/leaderboard/{other_stage_id}")
     assert response.status_code == 404
-
