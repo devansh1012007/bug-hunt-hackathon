@@ -25,7 +25,7 @@ import {
   StatusChip,
   KVRow,
 } from '../../ui/components'
-import { adminErrorText, downloadCsv } from '../../components/StepUp'
+import { adminErrorText, downloadCsv, needsStepUp, StepUpPanel, useStepUpWindow } from '../../components/StepUp'
 
 /* event lifecycle transitions as implemented by the backend */
 const EVENT_TRANSITIONS: Record<string, string[]> = {
@@ -222,6 +222,8 @@ function LiveOpsSection({ eventId }: { eventId: string }) {
   const [extendSeconds, setExtendSeconds] = useState<Record<string, string>>({})
   const [announce, setAnnounce] = useState({ severity: 'info', body: '' })
   const [announceDone, setAnnounceDone] = useState<string | null>(null)
+  const [stepUpUntil, setStepUpUntil] = useState<number | null>(null)
+  const { nowMs, elevated } = useStepUpWindow(stepUpUntil)
 
   async function stageAction(stageId: string, action: string) {
     setBusy(true)
@@ -256,6 +258,10 @@ function LiveOpsSection({ eventId }: { eventId: string }) {
   }
 
   async function release(stageId: string, action: 'evaluate' | 'release') {
+    if (!elevated) {
+      setError('Confirm your password in the step-up panel before evaluating or publishing results.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -265,6 +271,7 @@ function LiveOpsSection({ eventId }: { eventId: string }) {
       })
       await queryClient.invalidateQueries({ queryKey: ['admin-live', eventId] })
     } catch (err) {
+      if (needsStepUp(err)) setStepUpUntil(null)
       setError(adminErrorText(err))
     } finally {
       setBusy(false)
@@ -300,6 +307,12 @@ function LiveOpsSection({ eventId }: { eventId: string }) {
   return (
     <div className="stack">
       {error && <ErrorBanner error={new ApiRequestError({ code: 'OPERATION', serverMessage: error })} />}
+      <StepUpPanel
+        stepUpUntil={stepUpUntil}
+        onStepUp={setStepUpUntil}
+        nowMs={nowMs}
+        note="Stage evaluation and results publication require a recent password confirmation."
+      />
 
       <Panel
         exhibit="EX-02"
@@ -414,10 +427,10 @@ function LiveOpsSection({ eventId }: { eventId: string }) {
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span className="overline">Release</span>
-                  <Button size="sm" disabled={busy || st.status !== 'ended'} onClick={() => void release(st.id, 'evaluate')} title={st.status !== 'ended' ? 'Requires stage status ended' : undefined}>
+                  <Button size="sm" disabled={busy || !elevated || st.status !== 'ended'} onClick={() => void release(st.id, 'evaluate')} title={!elevated ? 'Requires recent password confirmation' : st.status !== 'ended' ? 'Requires stage status ended' : undefined}>
                     Evaluate
                   </Button>
-                  <Button size="sm" variant="primary" disabled={busy || !(st.status === 'ended' || st.status === 'evaluating')} onClick={() => void release(st.id, 'release')} title="Requires stage ended or evaluating">
+                  <Button size="sm" variant="primary" disabled={busy || !elevated || !(st.status === 'ended' || st.status === 'evaluating')} onClick={() => void release(st.id, 'release')} title={!elevated ? 'Requires recent password confirmation' : 'Requires stage ended or evaluating'}>
                     Release results
                   </Button>
                   <span className="muted small">ended {'>'} evaluating {'>'} released {'>'} final</span>

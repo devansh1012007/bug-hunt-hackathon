@@ -21,6 +21,64 @@ from .db import app_session, uuid7
 RETRY_BACKOFF_S = [10, 60, 300, 900]
 
 
+def stage_release_blockers(session: Session, stage_id: str) -> dict[str, int]:
+    """Return work that must finish before participant feedback can be published.
+
+    Job rows stay active until their handler's database transaction has committed.
+    Including queued, running, and dead jobs makes this a fail-closed barrier for
+    at-least-once delivery: an expired/dead scoring task must be recovered or
+    explicitly resolved before the event can publish a partial ledger.
+    """
+    pending_jobs = int(
+        session.execute(
+            text(
+                "SELECT count(*) FROM app.jobs j "
+                "WHERE j.status IN ('queued', 'running', 'dead') AND ("
+                "  (j.kind IN ('evaluate_submission', 'evaluate_level_submission', "
+                "               'verify_flag', 'apply_review_outcome', 'apply_test_results') "
+                "   AND EXISTS (SELECT 1 FROM app.submissions s "
+                "               WHERE s.id::text = j.payload ->> 'submission_id' "
+                "                 AND s.stage_id = CAST(:s AS uuid))) "
+                "  OR (j.kind = 'create_review_item' "
+                "      AND COALESCE(j.payload ->> 'reason', '') <> 'auto_accept_confirm' "
+                "      AND EXISTS (SELECT 1 FROM app.submissions s "
+                "                  WHERE s.id::text = j.payload ->> 'submission_id' "
+                "                    AND s.stage_id = CAST(:s AS uuid))) "
+                "  OR (j.kind = 'release_feedback' "
+                "      AND j.payload ->> 'stage_id' = :stage_id "
+                "      AND COALESCE(j.payload ->> 'publish', 'false') <> 'true')"
+                ")"
+            ),
+            {"s": stage_id, "stage_id": stage_id},
+        ).scalar_one()
+    )
+    unresolved_submissions = int(
+        session.execute(
+            text(
+                "SELECT count(*) FROM app.submissions "
+                "WHERE stage_id = CAST(:s AS uuid) AND status IN ('needs_review', 'in_review')"
+            ),
+            {"s": stage_id},
+        ).scalar_one()
+    )
+    open_review_items = int(
+        session.execute(
+            text(
+                "SELECT count(*) FROM app.review_items ri "
+                "JOIN app.submissions s ON s.id = ri.submission_id "
+                "WHERE s.stage_id = CAST(:s AS uuid) AND ri.status <> 'decided' "
+                "AND COALESCE(ri.reason, '') <> 'auto_accept_confirm'"
+            ),
+            {"s": stage_id},
+        ).scalar_one()
+    )
+    return {
+        "pending_scoring_jobs": pending_jobs,
+        "unresolved_submissions": unresolved_submissions,
+        "open_review_items": open_review_items,
+    }
+
+
 def enqueue(session: Session, kind: str, payload: dict, *, max_attempts: int = 5) -> str:
     job_id = str(uuid7())
     session.execute(

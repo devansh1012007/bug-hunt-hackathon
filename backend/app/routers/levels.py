@@ -637,7 +637,7 @@ def team_score(p: Principal = Depends(get_principal)):
         stages = (
             s.execute(
                 text(
-                    "SELECT id, ordinal, name, config FROM app.stages "
+                    "SELECT id, ordinal, name, config, status, results_published_at FROM app.stages "
                     "WHERE event_id = CAST(:e AS uuid) AND kind = 'level' ORDER BY ordinal"
                 ),
                 {"e": event_id},
@@ -651,6 +651,7 @@ def team_score(p: Principal = Depends(get_principal)):
                     "SELECT st.ordinal AS level_no, st.name, l.component, SUM(l.points) AS points "
                     "FROM app.score_ledger_entries l JOIN app.stages st ON st.id = l.stage_id "
                     "WHERE l.team_id = CAST(:t AS uuid) AND st.event_id = CAST(:e AS uuid) AND st.kind = 'level' "
+                    "AND st.status IN ('released', 'final') AND st.results_published_at IS NOT NULL "
                     "GROUP BY st.ordinal, st.name, l.component ORDER BY st.ordinal"
                 ),
                 {"t": team_id, "e": event_id},
@@ -682,7 +683,8 @@ def team_score(p: Principal = Depends(get_principal)):
             text(
                 "SELECT COALESCE(SUM(l.points), 0) FROM app.score_ledger_entries l "
                 "JOIN app.stages st ON st.id = l.stage_id "
-                "WHERE l.team_id = CAST(:t AS uuid) AND st.event_id = CAST(:e AS uuid) AND st.kind = 'level'"
+                "WHERE l.team_id = CAST(:t AS uuid) AND st.event_id = CAST(:e AS uuid) AND st.kind = 'level' "
+                "AND st.status IN ('released', 'final') AND st.results_published_at IS NOT NULL"
             ),
             {"t": team_id, "e": event_id},
         ).scalar_one()
@@ -690,10 +692,13 @@ def team_score(p: Principal = Depends(get_principal)):
     for stage in stages:
         level_no = int(stage["ordinal"])
         evaluation = evaluations.get(stage["id"], {})
-        submission_count = int(evaluation.get("submission_count") or 0)
-        evaluation_status = "not_submitted"
-        if submission_count:
-            evaluation_status = "evaluating" if evaluation.get("evaluating") else "complete"
+        published = stage["status"] in ("released", "final") and stage["results_published_at"] is not None
+        submission_count = int(evaluation.get("submission_count") or 0) if published else 0
+        evaluation_status = "not_released"
+        if published:
+            evaluation_status = "not_submitted"
+            if submission_count:
+                evaluation_status = "evaluating" if evaluation.get("evaluating") else "complete"
         by_level[level_no] = {
             "level_no": level_no,
             "name": stage["name"],
@@ -712,7 +717,13 @@ def team_score(p: Principal = Depends(get_principal)):
     for lvl in by_level.values():
         lvl["points"] = lvl["total"]
         lvl["score"] = sum(points for component, points in lvl["components"].items() if component != "ctf_bonus")
-    released = member["event_status"] in ("closed", "finalized")
+    released = (
+        member["event_status"] in ("closed", "finalized")
+        and bool(stages)
+        and all(
+            stage["status"] in ("released", "final") and stage["results_published_at"] is not None for stage in stages
+        )
+    )
     return {
         "team_id": team_id,
         "levels": list(by_level.values()),

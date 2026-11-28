@@ -89,6 +89,9 @@ Participant display distinguishes cumulative points from evaluation score.
 Points are the sum of all ledger entries, including CTF bonuses, penalties and
 adjustments. A level's score is the sum of its non-CTF ledger entries and is
 displayed as `score / max_points` only when `evaluation_status` is `complete`.
+Before explicit organizer publication, participant APIs return no score
+components or totals and the dashboard shows `Not released`; internal ledger
+entries do not become visible merely because evaluation has finished.
 `max_points` is a participant-safe ceiling stored in the app stage config; the
 participant API never reads ground truth to obtain it. The development seed
 uses 275 for each level because every fixture bug can be claimed once per
@@ -124,9 +127,11 @@ The evaluator's decision paths (deterministic matcher, then evaluator jobs):
   points; not invalid; no penalty.
 - Reviewer decisions from the queue (accept_full, accept_partial, duplicate,
   reject_invalid, unplanned_valid, needs_second_review) map to submission
-  statuses and ledger effects as above; needs_second_review returns the
-  submission to in_review and closes the item (a second item is not
-  auto-created in v1; flag it to the organizers).
+  statuses and ledger effects as above. A needs_second_review decision closes
+  the first item, keeps the submission in_review, and creates a new open
+  second-review item in the same transaction. The first reviewer cannot claim
+  or decide that item; a different reviewer must record a terminal decision
+  before the release barrier can pass.
 
 ## 4. CTF bonus and caps
 
@@ -182,10 +187,30 @@ totals in this order:
    submissions carrying any non-penalty ledger entry; a team with none sorts
    last).
 
-Snapshots are versioned and served per the stage's leaderboard_mode: hidden
-(Fall Back default) blocks the board for participants until release, frozen
-serves snapshots delayed by leaderboard_delay_s (600 seconds), live serves
-the newest snapshot. Release refreshes the snapshot with public visibility.
+Snapshots are versioned and served per the stage's leaderboard_mode. For
+participant requests, every mode is additionally gated by the
+`results_published_at` marker, which is committed only after the explicit
+organizer release job has finished writing the ledger and feedback flags.
+This prevents `live` or `frozen` from becoming a pre-release score bypass.
+After publication, the hidden mode stops the pre-release live view,
+frozen serves snapshots delayed by `leaderboard_delay_s` (600 seconds), and
+live serves the newest snapshot. The release job enqueues the public snapshot
+in the same transaction that records publication completion. Snapshots created
+before `results_published_at` are excluded, so an old live snapshot cannot
+appear as the final result while the fresh post-publication snapshot is queued.
+
+The organizer's Evaluate action only advances the stage to `evaluating`;
+per-submission evaluation jobs were enqueued when submissions were accepted.
+Release is a separate barrier: queued, running, or dead scoring jobs, unresolved
+`needs_review`/`in_review` submissions, and required open review items block
+publication. Dead-lettered jobs remain blockers until an operator recovers or
+resolves them. The release worker repeats the check while holding the stage row
+lock. Reviewer decisions and organizer test-result writes take that same lock,
+and deadline auto-submit rechecks the stage status after acquiring it, so no
+new score-affecting work can slip in after the release check. Release defaults
+and penalties are applied only during explicit publication, not during
+evaluation. The publication marker, feedback flags, and enqueue of the fresh
+public leaderboard snapshot commit together.
 
 ## 7. What is configurable, and when it freezes
 

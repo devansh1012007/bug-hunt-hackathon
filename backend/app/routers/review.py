@@ -68,7 +68,11 @@ def claim_item(item_id: str, p: Principal = Depends(require_staff())):
         row = (
             s.execute(
                 text(
-                    "SELECT id, status, claimed_by, claimed_at FROM app.review_items WHERE id = CAST(:i AS uuid) FOR UPDATE"
+                    "SELECT ri.id, ri.status, ri.claimed_by, ri.claimed_at, ri.reason, "
+                    "st.status AS stage_status, st.results_published_at "
+                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id "
+                    "JOIN app.stages st ON st.id = s.stage_id "
+                    "WHERE ri.id = CAST(:i AS uuid) FOR UPDATE OF ri, st"
                 ),
                 {"i": item_id},
             )
@@ -77,8 +81,23 @@ def claim_item(item_id: str, p: Principal = Depends(require_staff())):
         )
         if row is None:
             raise ApiError("NOT_FOUND")
+        if row["stage_status"] in ("released", "final") or row["results_published_at"] is not None:
+            raise ApiError(
+                "VALIDATION_ERROR", details={"decision": "Results have already been published for this stage."}
+            )
         if row["status"] == "decided":
             raise ApiError("VALIDATION_ERROR", details={"claim": "Item already decided."})
+        if row["reason"] == "needs_second_review":
+            prior_review = s.execute(
+                text(
+                    "SELECT 1 FROM app.reviews WHERE submission_id = "
+                    "(SELECT submission_id FROM app.review_items WHERE id = CAST(:i AS uuid)) "
+                    "AND reviewer_id = CAST(:u AS uuid) LIMIT 1"
+                ),
+                {"i": item_id, "u": p.id},
+            ).first()
+            if prior_review is not None:
+                raise ApiError("AUTH_FORBIDDEN", message="A second review must be completed by a different reviewer.")
         if row["status"] == "claimed" and row["claimed_by"] is not None and str(row["claimed_by"]) != p.id:
             claimed_at = row["claimed_at"]
             from datetime import datetime, timedelta
@@ -183,8 +202,11 @@ def record_decision(item_id: str, body: DecisionIn, request: Request, p: Princip
         row = (
             s.execute(
                 text(
-                    "SELECT ri.id, ri.status, ri.submission_id, ri.claimed_by, s.team_id, s.kind, s.challenge_version_id "
-                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id WHERE ri.id = CAST(:i AS uuid) FOR UPDATE"
+                    "SELECT ri.id, ri.status, ri.submission_id, ri.claimed_by, ri.reason, s.team_id, s.kind, s.challenge_version_id, "
+                    "st.status AS stage_status, st.results_published_at "
+                    "FROM app.review_items ri JOIN app.submissions s ON s.id = ri.submission_id "
+                    "JOIN app.stages st ON st.id = s.stage_id "
+                    "WHERE ri.id = CAST(:i AS uuid) FOR UPDATE OF ri, st"
                 ),
                 {"i": item_id},
             )
@@ -193,8 +215,28 @@ def record_decision(item_id: str, body: DecisionIn, request: Request, p: Princip
         )
         if row is None:
             raise ApiError("NOT_FOUND")
+        if row["stage_status"] in ("released", "final") or row["results_published_at"] is not None:
+            raise ApiError(
+                "VALIDATION_ERROR",
+                details={"decision": "Results have already been published for this stage."},
+            )
         if row["status"] == "decided":
             raise ApiError("VALIDATION_ERROR", details={"decision": "Already decided."})
+        if row["reason"] == "needs_second_review":
+            prior_review = s.execute(
+                text(
+                    "SELECT 1 FROM app.reviews WHERE submission_id = CAST(:sid AS uuid) "
+                    "AND reviewer_id = CAST(:u AS uuid) LIMIT 1"
+                ),
+                {"sid": str(row["submission_id"]), "u": p.id},
+            ).first()
+            if prior_review is not None:
+                raise ApiError("AUTH_FORBIDDEN", message="A second review must be completed by a different reviewer.")
+            if body.decision == "needs_second_review":
+                raise ApiError(
+                    "VALIDATION_ERROR",
+                    details={"decision": "A second review cannot request another second review."},
+                )
         if row["status"] == "claimed" and row["claimed_by"] is not None and str(row["claimed_by"]) != p.id:
             raise ApiError("AUTH_FORBIDDEN", message="Claim this item before deciding.")
 
@@ -228,11 +270,23 @@ def record_decision(item_id: str, body: DecisionIn, request: Request, p: Princip
             text("UPDATE app.submissions SET status=:st WHERE id = CAST(:sid AS uuid)"),
             {"st": sub_status, "sid": str(row["submission_id"])},
         )
-        enqueue(
-            s,
-            "apply_review_outcome",
-            {"submission_id": str(row["submission_id"]), "review_id": review_id, "decision": body.decision},
-        )
+        if body.decision == "needs_second_review":
+            # The second-review task is created in the same transaction as the
+            # first decision. No scoring job is queued until an independent
+            # reviewer records the terminal decision.
+            s.execute(
+                text(
+                    "INSERT INTO app.review_items (id, submission_id, status, priority, reason) "
+                    "VALUES (CAST(:id AS uuid), CAST(:sid AS uuid), 'open', 1, 'needs_second_review')"
+                ),
+                {"id": str(uuid7()), "sid": str(row["submission_id"])},
+            )
+        else:
+            enqueue(
+                s,
+                "apply_review_outcome",
+                {"submission_id": str(row["submission_id"]), "review_id": review_id, "decision": body.decision},
+            )
         audit_write(
             s,
             actor_id=p.id,

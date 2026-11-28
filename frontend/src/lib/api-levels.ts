@@ -208,7 +208,7 @@ export interface RepoLockResult {
   replay: boolean
 }
 
-export type LevelEvaluationStatus = 'not_submitted' | 'evaluating' | 'complete'
+export type LevelEvaluationStatus = 'not_released' | 'not_submitted' | 'evaluating' | 'complete'
 
 export interface TeamPointsLevel {
   level_no: number

@@ -29,7 +29,7 @@ from ..config import settings
 from ..db import app_session, gt_session, health_probe, uuid7
 from ..deps import Principal, require_organizer, step_up_verified
 from ..errors import ApiError
-from ..jobs import enqueue
+from ..jobs import enqueue, stage_release_blockers
 from ..scoring import add_ledger_entry
 
 router = APIRouter(tags=["admin"])
@@ -432,27 +432,72 @@ def control_stage(stage_id: str, body: dict, request: Request, p: Principal = De
 
 
 @router.post("/admin/stages/{stage_id}/release")
-def release_results(stage_id: str, body: dict, request: Request, p: Principal = Depends(require_organizer)):
-    """ENDED -> EVALUATING -> RELEASED: publishes verdicts and leaderboard (ADM-RS-04)."""
+def release_results(stage_id: str, body: dict, request: Request, p: Principal = Depends(step_up_verified)):
+    """Evaluate submissions, then publish only after scoring and required review work is complete."""
     action = body.get("action", "release")
     reason = body.get("reason", "results release")
+    result = {"ok": True}
     with app_session() as s:
-        st = s.execute(
-            text("SELECT status FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"), {"s": stage_id}
-        ).first()
+        st = (
+            s.execute(
+                text("SELECT status, results_published_at FROM app.stages WHERE id = CAST(:s AS uuid) FOR UPDATE"),
+                {"s": stage_id},
+            )
+            .mappings()
+            .first()
+        )
         if st is None:
             raise ApiError("NOT_FOUND")
-        if action == "evaluate" and st[0] != "ended":
-            raise ApiError("VALIDATION_ERROR", details={"transition": "Stage must be ended first."})
-        if action == "release" and st[0] not in ("ended", "evaluating"):
-            raise ApiError("VALIDATION_ERROR", details={"transition": f"Cannot release from {st[0]}."})
+
         if action == "evaluate":
-            s.execute(text("UPDATE app.stages SET status='evaluating' WHERE id = CAST(:s AS uuid)"), {"s": stage_id})
-            enqueue(s, "release_feedback", {"stage_id": stage_id})
+            if st["status"] == "ended":
+                s.execute(
+                    text("UPDATE app.stages SET status='evaluating' WHERE id = CAST(:s AS uuid)"), {"s": stage_id}
+                )
+            elif st["status"] != "evaluating":
+                raise ApiError(
+                    "VALIDATION_ERROR",
+                    details={"transition": f"Cannot evaluate from {st['status']}."},
+                )
+            # Per-submission evaluation jobs are enqueued when submissions are
+            # accepted. This transition must not run release defaults/penalties.
         elif action == "release":
-            s.execute(text("UPDATE app.stages SET status='released' WHERE id = CAST(:s AS uuid)"), {"s": stage_id})
-            enqueue(s, "release_feedback", {"stage_id": stage_id})
-            enqueue(s, "refresh_leaderboard", {"stage_id": stage_id, "visibility": "public"})
+            if st["results_published_at"] is not None:
+                result["already_published"] = True
+            else:
+                if st["status"] not in ("ended", "evaluating", "released", "final"):
+                    raise ApiError(
+                        "VALIDATION_ERROR",
+                        details={"transition": f"Cannot release from {st['status']}."},
+                    )
+                blockers = stage_release_blockers(s, stage_id)
+                if any(blockers.values()):
+                    raise ApiError(
+                        "VALIDATION_ERROR",
+                        message="Results cannot be released while scoring or required review work remains.",
+                        details={"release_blocked": blockers},
+                    )
+                pending_publish = s.execute(
+                    text(
+                        "SELECT 1 FROM app.jobs WHERE kind = 'release_feedback' "
+                        "AND payload ->> 'stage_id' = :s AND payload ->> 'publish' = 'true' "
+                        "AND status IN ('queued', 'running') LIMIT 1"
+                    ),
+                    {"s": stage_id},
+                ).first()
+                if st["status"] not in ("released", "final"):
+                    s.execute(
+                        text("UPDATE app.stages SET status='released' WHERE id = CAST(:s AS uuid)"),
+                        {"s": stage_id},
+                    )
+                if pending_publish is not None:
+                    result["release_pending"] = True
+                else:
+                    enqueue(s, "release_feedback", {"stage_id": stage_id, "publish": True})
+                    result["release_pending"] = True
+        else:
+            raise ApiError("VALIDATION_ERROR", details={"action": "Unknown results action."})
+
         audit_write(
             s,
             actor_id=p.id,
@@ -461,9 +506,9 @@ def release_results(stage_id: str, body: dict, request: Request, p: Principal = 
             entity_type="stage",
             entity_id=stage_id,
             request_id=request.state.request_id,
-            details={"reason": reason},
+            details={"reason": reason, **{k: v for k, v in result.items() if k != "ok"}},
         )
-    return {"ok": True}
+    return result
 
 
 # --- teams and admin-managed participants -------------------------------------
@@ -1382,14 +1427,38 @@ def update_ground_truth_flag(
 
 @router.post("/admin/challenges/{challenge_id}/ground-truth/test-results")
 def record_test_results(challenge_id: str, body: dict, request: Request, p: Principal = Depends(step_up_verified)):
-    """Organizer records offline functional-test results per submission (ADR-019):
-    {submission_id, tests_passed, tests_total} -> enqueues ledger application."""
+    """Organizer records offline functional-test results before stage publication."""
     sub_id = body.get("submission_id")
     passed = int(body.get("tests_passed", 0))
     total = int(body.get("tests_total", 0))
     if not sub_id or total <= 0 or passed < 0 or passed > total:
         raise ApiError("VALIDATION_ERROR", details={"tests": "Provide submission_id, tests_passed, tests_total."})
     with app_session() as s:
+        stage = (
+            s.execute(
+                text(
+                    "SELECT st.id, st.status, st.results_published_at FROM app.submissions sub "
+                    "JOIN app.stages st ON st.id = sub.stage_id "
+                    "WHERE sub.id = CAST(:sub AS uuid) "
+                    "AND sub.challenge_version_id = CAST(:challenge AS uuid) FOR UPDATE OF st"
+                ),
+                {"sub": sub_id, "challenge": challenge_id},
+            )
+            .mappings()
+            .first()
+        )
+        if stage is None:
+            raise ApiError("NOT_FOUND")
+        if stage["status"] in ("released", "final") or stage["results_published_at"] is not None:
+            raise ApiError(
+                "VALIDATION_ERROR",
+                details={"tests": "Functional-test results cannot be added after publication."},
+            )
+        if stage["status"] not in ("active", "paused", "ended", "evaluating"):
+            raise ApiError(
+                "VALIDATION_ERROR",
+                details={"tests": "Functional-test results can be recorded only during or after an active stage."},
+            )
         enqueue(
             s,
             "apply_test_results",
